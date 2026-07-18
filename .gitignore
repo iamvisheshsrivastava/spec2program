@@ -26,6 +26,10 @@ env/
 # ---- Generated / runtime output ----
 output/
 *.log
+data/_server_out.txt
+data/_server_err.txt
+data/_*.json
+data/_*.xml
 
 # ---- Editor / OS ----
 .vscode/
