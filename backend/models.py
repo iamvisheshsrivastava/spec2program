@@ -169,11 +169,82 @@ class ProgramAnalytics(BaseModel):
     )
 
 
+class ScheduledStep(BaseModel):
+    """A step placed on the earliest-start-time critical-path schedule."""
+
+    order: int
+    start: float = Field(..., description="Earliest possible start time (seconds).")
+    end: float = Field(..., description="Earliest possible finish time (seconds).")
+
+
+class OptimizationResult(BaseModel):
+    """Critical-path scheduling analysis: how much cycle time could be saved.
+
+    ``sequential_seconds`` is the naive total (every step run back-to-back, the
+    number already reported in ``ProgramAnalytics``). ``critical_path_seconds``
+    is the minimum possible cycle time if independent steps ran in parallel on
+    multi-channel tester hardware, honouring every declared dependency. The gap
+    between the two is the concrete optimisation lever this project targets.
+    """
+
+    sequential_seconds: float
+    critical_path_seconds: float
+    speedup_factor: float = Field(
+        ..., description="sequential_seconds / critical_path_seconds."
+    )
+    critical_path_steps: list[int] = Field(
+        default_factory=list,
+        description="Orders of the steps that sit on the longest dependency chain.",
+    )
+    schedule: list[ScheduledStep] = Field(
+        default_factory=list,
+        description="Earliest-start-time schedule for every step under unlimited parallelism.",
+    )
+
+
 class GenerateResponse(BaseModel):
     """Response body for POST /api/generate."""
 
     program: CommissioningProgram
     validation: list[ValidationIssue]
     analytics: ProgramAnalytics
+    optimization: OptimizationResult
     is_valid: bool = Field(..., description="True if no 'error'-severity issues.")
     provider: str = Field(..., description="Which LLM provider produced the program.")
+    repair_attempts: int = Field(
+        0, description="How many self-repair rounds the LLM needed to reach this result."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batch mode - run several specs at once and aggregate optimisation findings
+# ---------------------------------------------------------------------------
+class BatchRequest(BaseModel):
+    """Request body for POST /api/batch."""
+
+    specs: list[VehicleSpec] = Field(..., description="One or more vehicle specs.")
+
+
+class BatchAggregate(BaseModel):
+    """Fleet-level rollup across every spec in a batch run."""
+
+    vehicles: int
+    valid_count: int
+    validity_rate: float
+    avg_cycle_time_seconds: float
+    avg_critical_path_seconds: float
+    avg_speedup_factor: float
+    bottleneck_ecus: list[str] = Field(
+        default_factory=list,
+        description="ECU ids most frequently flagged with the highest per-vehicle time share.",
+    )
+    most_common_issue: str | None = Field(
+        None, description="The most frequently recurring validation message across the fleet."
+    )
+
+
+class BatchResponse(BaseModel):
+    """Response body for POST /api/batch."""
+
+    results: list[GenerateResponse]
+    aggregate: BatchAggregate

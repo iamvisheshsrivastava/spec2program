@@ -73,6 +73,41 @@ def test_program_ends_with_clear_and_validation(simple_spec):
     assert types[-1] == StepType.VALIDATION
 
 
+def test_mock_never_asserts_unsupported_uds_service(simple_spec):
+    """Regression test: the mock planner used to hardcode UDS 0x34 for
+    flashing and 0x22 for per-ECU validation regardless of what the ECU
+    actually declared as supported, which the evaluation harness surfaced as
+    real (~70%) invalidity on randomised specs supporting only a subset of
+    services. Every step's uds_service, if set, must be one the ECU supports.
+    """
+    ecu_by_id = {e.ecu_id: e for e in simple_spec.ecus}
+    program = CommissioningProgram.model_validate(
+        MockProvider().generate_program(simple_spec)
+    )
+    for step in program.steps:
+        if step.uds_service is not None:
+            assert step.uds_service in ecu_by_id[step.ecu_id].supported_uds_services
+
+
+def test_mock_uses_whichever_flash_service_is_supported():
+    """If an ECU only lists 0x36 (not 0x34), flashing must use 0x36."""
+    from backend.models import Ecu, VehicleSpec
+
+    spec = VehicleSpec(
+        vehicle_id="V1",
+        model="M",
+        model_year=2026,
+        ecus=[Ecu(
+            ecu_id="A", name="A", part_number="PN-A",
+            software_version="1", target_software_version="2",
+            supported_uds_services=["0x10", "0x36"],  # no 0x34
+        )],
+    )
+    program = CommissioningProgram.model_validate(MockProvider().generate_program(spec))
+    flash_step = next(s for s in program.steps if s.step_type == StepType.FLASH_SOFTWARE)
+    assert flash_step.uds_service == "0x36"
+
+
 def test_full_pipeline_is_valid(simple_spec):
     """End-to-end: the generated program should pass validation cleanly."""
     result = generate(simple_spec)

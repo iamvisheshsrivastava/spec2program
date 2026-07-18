@@ -33,7 +33,7 @@ from typing import Protocol
 import httpx
 
 from .config import settings
-from .models import VehicleSpec
+from .models import ValidationIssue, VehicleSpec
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +46,18 @@ class LLMProvider(Protocol):
 
     def generate_program(self, spec: VehicleSpec) -> dict:
         """Return a raw dict shaped like a ``CommissioningProgram``."""
+        ...
+
+    def repair_program(
+        self, spec: VehicleSpec, previous_program: dict, issues: list[ValidationIssue]
+    ) -> dict:
+        """Return a corrected program dict, given the failed attempt and why it failed.
+
+        Optional: only real (LLM-backed) providers implement this. The
+        generation pipeline checks with ``hasattr`` before calling it, so the
+        mock provider (which never needs a self-repair round) can simply omit
+        this method.
+        """
         ...
 
 
@@ -160,14 +172,17 @@ class MockProvider:
 
             flash_prereq = [o for o in [sec_order or session_order] if o]
 
-            # 3) Flash software if a newer target version is specified.
+            # 3) Flash software if a newer target version is specified. Use
+            #    whichever of 0x34 (RequestDownload) / 0x36 (TransferData)
+            #    the ECU actually advertises - some ECUs only list one.
             last_write_order = None
             if needs_flash and {"0x34", "0x36"} & supports:
+                flash_uds = "0x34" if "0x34" in supports else "0x36"
                 flash_order = add(
                     "flash_software", ecu.ecu_id,
                     (f"Flash {ecu.name} "
                      f"{ecu.software_version or '?'} -> {ecu.target_software_version}."),
-                    "0x34", flash_prereq,
+                    flash_uds, flash_prereq,
                 )
                 last_write_order = flash_order
 
@@ -180,13 +195,22 @@ class MockProvider:
                     "0x2E", write_prereq,
                 )
 
-            # 5) Validate the ECU (read data / routine, UDS 0x22 or 0x31).
+            # 5) Validate the ECU (read data / routine). Prefer 0x22 (read
+            #    data by identifier), fall back to 0x31 (routine control), or
+            #    omit the service id entirely if the ECU supports neither -
+            #    never assert a service the spec doesn't list as supported.
             if last_write_order or session_order:
                 val_prereq = [o for o in [last_write_order, session_order] if o]
+                if "0x22" in supports:
+                    val_uds = "0x22"
+                elif "0x31" in supports:
+                    val_uds = "0x31"
+                else:
+                    val_uds = None
                 add(
                     "validation", ecu.ecu_id,
                     f"Validate {ecu.name}: read back configuration and self-test.",
-                    "0x22", val_prereq,
+                    val_uds, val_prereq,
                 )
 
         # Global closing steps across the whole vehicle: clear fault memory and
@@ -309,6 +333,60 @@ def _call_chat_completions(
     return _extract_json(content)
 
 
+def _call_repair(
+    *, base_url: str, api_key: str, model: str, extra_headers: dict | None,
+    spec: VehicleSpec, previous_program: dict, issues: list[ValidationIssue],
+) -> dict:
+    """POST a follow-up request asking the model to fix its own failed output.
+
+    This is the self-repair loop: rather than discarding a program the moment
+    the rule-based validator finds a problem, we show the model exactly what
+    it got wrong (in the validator's own words) and its own prior answer, and
+    ask it to correct just that. This mirrors how "AI-based code analysis /
+    AI-supported software development" is meant to work - detect, explain,
+    fix - rather than a single unchecked generation pass.
+    """
+    issues_text = "\n".join(
+        f"- [{issue.severity}] {issue.message}"
+        + (f" (step {issue.step_order})" if issue.step_order is not None else "")
+        for issue in issues
+    )
+    user_content = (
+        "The commissioning program below, which you previously generated for "
+        "this vehicle specification, failed rule-based validation.\n\n"
+        f"Vehicle specification (JSON):\n{spec.model_dump_json(indent=2)}\n\n"
+        f"Your previous program (JSON):\n{json.dumps(previous_program, indent=2)}\n\n"
+        f"Validation issues found:\n{issues_text}\n\n"
+        "Return a corrected program that resolves every issue above while "
+        "still following all the rules in the system prompt. Return ONLY the "
+        "corrected JSON, matching the exact same schema as before."
+    )
+    payload = {
+        "model": model,
+        "temperature": settings.llm_temperature,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if extra_headers:
+        headers.update(extra_headers)
+
+    with httpx.Client(timeout=settings.llm_timeout) as client:
+        resp = client.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    content = data["choices"][0]["message"]["content"]
+    return _extract_json(content)
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible provider - used when an API key is configured
 # ---------------------------------------------------------------------------
@@ -324,6 +402,19 @@ class OpenAIProvider:
             model=settings.llm_model,
             extra_headers=None,
             spec=spec,
+        )
+
+    def repair_program(
+        self, spec: VehicleSpec, previous_program: dict, issues: list[ValidationIssue]
+    ) -> dict:
+        return _call_repair(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            extra_headers=None,
+            spec=spec,
+            previous_program=previous_program,
+            issues=issues,
         )
 
 
@@ -350,6 +441,22 @@ class OpenRouterProvider:
                 "X-Title": settings.openrouter_site_name,
             },
             spec=spec,
+        )
+
+    def repair_program(
+        self, spec: VehicleSpec, previous_program: dict, issues: list[ValidationIssue]
+    ) -> dict:
+        return _call_repair(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            extra_headers={
+                "HTTP-Referer": settings.openrouter_site_url,
+                "X-Title": settings.openrouter_site_name,
+            },
+            spec=spec,
+            previous_program=previous_program,
+            issues=issues,
         )
 
 

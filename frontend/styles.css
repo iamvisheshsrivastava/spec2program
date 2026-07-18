@@ -494,6 +494,32 @@ h2 {
 .about-links { font-family: var(--mono); font-size: 13px; }
 .about-links a { color: var(--black); }
 
+/* ------------------------------ Small button ----------------------------- */
+.btn-small { padding: 8px 14px; font-size: 12px; }
+
+/* ------------------------------ Batch panel ------------------------------ */
+.batch-wrap {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 24px 24px;
+}
+.batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-top: 2px solid var(--black);
+  padding-top: 20px;
+  margin-bottom: 8px;
+}
+.batch-head h2 { font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.batch-result {
+  margin-top: 16px;
+  border: 2px solid var(--black);
+  padding: 20px;
+}
+
 /* ------------------------------- Footer --------------------------------- */
 .footer {
   max-width: 1280px;

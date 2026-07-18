@@ -9,5 +9,8 @@ pydantic-settings>=2.14.2
 # HTTP client for calling OpenAI-compatible LLM endpoints
 httpx>=0.28.1
 
+# Learned step-duration model (closed-form linear regression, no ML framework needed)
+numpy>=2.0.0
+
 # Testing
 pytest>=9.1.1

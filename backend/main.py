@@ -12,12 +12,21 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .batch import run_batch
 from .config import settings
 from .generator import generate
-from .models import GenerateRequest, GenerateResponse, VehicleSpec
+from .models import (
+    BatchRequest,
+    BatchResponse,
+    CommissioningProgram,
+    GenerateRequest,
+    GenerateResponse,
+    VehicleSpec,
+)
+from .otx_export import to_otx_xml
 
 # Resolve project paths relative to this file so the app works regardless of
 # the current working directory (important inside Docker and on PaaS hosts).
@@ -100,6 +109,30 @@ def generate_program(request: GenerateRequest) -> GenerateResponse:
         ) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/batch", response_model=BatchResponse)
+def generate_batch(request: BatchRequest) -> BatchResponse:
+    """Run the pipeline for every spec in the batch and return a fleet rollup."""
+    if not request.specs:
+        raise HTTPException(status_code=400, detail="Batch request contained no specs.")
+    try:
+        return run_batch(request.specs)
+    except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/export/otx")
+def export_otx(program: CommissioningProgram) -> Response:
+    """Export a generated program as an OTX-style XML procedure document."""
+    xml = to_otx_xml(program)
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={
+            "Content-Disposition": f'attachment; filename="{program.vehicle_id}_otx.xml"'
+        },
+    )
 
 
 # ---------------------------------------------------------------------------

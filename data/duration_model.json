@@ -1,0 +1,25 @@
+{
+  "weights": [
+    -4.880370914465,
+    -3.9192018089038934,
+    21.39681809422537,
+    -2.0440327356055543,
+    0.16295598783206297,
+    -2.8389096416239417,
+    0.9130605569169383,
+    7.877258981459039
+  ],
+  "feature_order": [
+    "diagnostic_session",
+    "security_access",
+    "flash_software",
+    "write_parameter",
+    "validation",
+    "fault_clear",
+    "flash_size_term",
+    "bias"
+  ],
+  "trained_on_rows": 2400,
+  "train_mae_seconds": 1.454,
+  "note": "Trained on a synthetic historical-run-log stand-in (scripts/train_duration_model.py); replace with real telemetry to retrain on actual line data."
+}

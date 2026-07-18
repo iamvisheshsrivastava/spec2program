@@ -30,7 +30,14 @@ const el = {
   issuesBlock: document.getElementById("issuesBlock"),
   issuesList: document.getElementById("issuesList"),
   stepsBody: document.getElementById("stepsBody"),
+  exportOtxBtn: document.getElementById("exportOtxBtn"),
+  batchBtn: document.getElementById("batchBtn"),
+  batchResult: document.getElementById("batchResult"),
 };
+
+// The most recently generated program, kept around so "Export OTX" can send
+// it without re-running generation. Cleared whenever the spec changes.
+let lastProgram = null;
 
 // Human-friendly labels for the machine step-type enum.
 const STEP_LABELS = {
@@ -123,6 +130,8 @@ async function loadSample(filename, { userInitiated = true } = {}) {
   // the two panels never show mismatched data.
   showState("empty");
   el.providerTag.hidden = true;
+  el.exportOtxBtn.hidden = true;
+  lastProgram = null;
 }
 
 /* ------------------------------- Errors --------------------------------- */
@@ -202,18 +211,28 @@ async function generate() {
 
 /* ------------------------------- Render --------------------------------- */
 function renderResult(data) {
-  const { program, validation, analytics, is_valid, provider } = data;
+  const { program, validation, analytics, optimization, is_valid, provider, repair_attempts } = data;
 
-  // Provider tag (mock / openai / openrouter / mock-fallback).
+  lastProgram = program;
+  el.exportOtxBtn.hidden = false;
+
+  // Provider tag (mock / openai / openrouter / mock-fallback), plus a note
+  // if the self-repair loop had to run.
   el.providerTag.hidden = false;
-  el.providerTag.textContent = `provider: ${provider}`;
+  el.providerTag.textContent = repair_attempts
+    ? `provider: ${provider} · repaired ×${repair_attempts}`
+    : `provider: ${provider}`;
   el.providerTag.classList.toggle("provider-tag-fallback", provider === "mock-fallback");
 
-  // Metrics strip.
+  // Metrics strip. Cycle time now shows both the naive sequential total and
+  // the critical-path (parallelised) minimum, with the speedup factor - the
+  // concrete optimisation number the project is meant to surface.
   const flashCount = analytics.steps_by_type.flash_software || 0;
   el.metrics.innerHTML = `
     ${metric(analytics.total_steps, "Steps")}
-    ${metric(formatTime(analytics.estimated_cycle_time_seconds), "Est. cycle time")}
+    ${metric(formatTime(analytics.estimated_cycle_time_seconds), "Sequential time")}
+    ${metric(formatTime(optimization.critical_path_seconds), "Critical-path time")}
+    ${metric(`${optimization.speedup_factor}×`, "Speedup potential")}
     ${metric(`${analytics.ecus_covered}/${analytics.ecus_total}`, "ECUs covered")}
     ${metric(flashCount, "Flash ops")}
   `;
@@ -310,8 +329,91 @@ el.specInput.addEventListener("input", () => {
   if (!el.resultState.hidden) {
     showState("empty");
     el.providerTag.hidden = true;
+    el.exportOtxBtn.hidden = true;
+    lastProgram = null;
   }
 });
+
+/* ------------------------------ OTX export ------------------------------- */
+el.exportOtxBtn.addEventListener("click", async () => {
+  if (!lastProgram) return;
+  try {
+    const res = await fetch("/api/export/otx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(lastProgram),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
+    }
+    const xml = await res.text();
+    const blob = new Blob([xml], { type: "application/xml" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${lastProgram.vehicle_id || "program"}_otx.xml`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    setError(err.message);
+  }
+});
+
+/* ------------------------------ Batch mode ------------------------------- */
+el.batchBtn.addEventListener("click", async () => {
+  el.batchBtn.disabled = true;
+  el.batchResult.hidden = false;
+  el.batchResult.innerHTML = `<p class="hint">Running batch…</p>`;
+  try {
+    const sampleList = await (await fetch("/api/samples")).json();
+    const specs = await Promise.all(
+      sampleList.map((s) =>
+        fetch(`/api/samples/${encodeURIComponent(s.file)}`).then((r) => r.json())
+      )
+    );
+    const res = await fetch("/api/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ specs }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
+    }
+    const data = await res.json();
+    renderBatch(data);
+  } catch (err) {
+    el.batchResult.innerHTML = `<p class="hint">Batch failed: ${esc(err.message)}</p>`;
+  } finally {
+    el.batchBtn.disabled = false;
+  }
+});
+
+function renderBatch(data) {
+  const a = data.aggregate;
+  el.batchResult.innerHTML = `
+    <div class="metrics">
+      ${metric(a.vehicles, "Vehicles")}
+      ${metric(`${Math.round(a.validity_rate * 100)}%`, "Validity rate")}
+      ${metric(formatTime(a.avg_cycle_time_seconds), "Avg sequential time")}
+      ${metric(formatTime(a.avg_critical_path_seconds), "Avg critical-path time")}
+      ${metric(`${a.avg_speedup_factor}×`, "Avg speedup")}
+    </div>
+    ${
+      a.bottleneck_ecus.length
+        ? `<p class="hint">Recurring bottleneck ECUs: ${a.bottleneck_ecus.map(esc).join(", ")}</p>`
+        : ""
+    }
+    ${
+      a.most_common_issue
+        ? `<p class="hint">Most common validation finding: ${esc(a.most_common_issue)}</p>`
+        : ""
+    }
+  `;
+}
 
 // Boot.
 probeHealth();

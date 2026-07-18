@@ -1,0 +1,25 @@
+# Render Blueprint - lets Render provision this service automatically from
+# the repo (New -> Blueprint), instead of clicking through the New Web
+# Service form by hand. Either path works since the Dockerfile is already
+# PORT-aware; this file just makes the setup reproducible and versioned.
+#
+# Secrets (LLM_API_KEY) are intentionally NOT set here - `sync: false` means
+# Render will prompt for it in the dashboard rather than committing it to
+# git.
+services:
+  - type: web
+    name: spec2program
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: LLM_PROVIDER
+        value: openrouter
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: anthropic/claude-sonnet-5
+      - key: LLM_TEMPERATURE
+        value: "0.1"
+      - key: CORS_ORIGINS
+        value: "*"

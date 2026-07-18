@@ -84,7 +84,10 @@
     <section class="panel">
       <div class="panel-head">
         <h2>Commissioning program</h2>
-        <div id="providerTag" class="provider-tag" hidden></div>
+        <div class="controls">
+          <button id="exportOtxBtn" class="btn btn-ghost btn-small" hidden>Export OTX</button>
+          <div id="providerTag" class="provider-tag" hidden></div>
+        </div>
       </div>
 
       <!-- Empty / loading / result states -->
@@ -136,6 +139,20 @@
       </div>
     </section>
   </main>
+
+  <!-- ===================== BATCH / FLEET MODE ===================== -->
+  <section class="batch-wrap">
+    <div class="batch-head">
+      <h2>Batch mode — fleet rollup</h2>
+      <button id="batchBtn" class="btn btn-ghost">Run batch on bundled samples</button>
+    </div>
+    <p class="hint">
+      Runs the full pipeline (generate → self-repair → validate → optimise)
+      across every bundled sample and rolls the results up: overall validity
+      rate, average cycle time and speedup, and recurring bottleneck ECUs.
+    </p>
+    <div id="batchResult" class="batch-result" hidden></div>
+  </section>
 
   <footer class="footer">
     <span>spec2program · prototype</span>
