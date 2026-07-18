@@ -1,0 +1,425 @@
+/* ==========================================================================
+   spec2program - stylesheet
+   Design language: strictly monochrome (white / black / grey), zero rounded
+   corners (sharp edges everywhere), crisp geometric line icons, generous
+   whitespace, and only subtle, smooth transitions. No decorative colour is
+   used except two functional signals: red (error) and green (valid).
+   ========================================================================== */
+
+:root {
+  --black: #000000;
+  --white: #ffffff;
+  --ink: #111111;      /* near-black text            */
+  --grey-900: #1a1a1a;
+  --grey-600: #555555;
+  --grey-400: #999999;
+  --grey-200: #e6e6e6; /* hairlines / borders        */
+  --grey-100: #f4f4f4; /* subtle fills               */
+  --ok: #0a7d2c;       /* functional green (valid)   */
+  --err: #c8102e;      /* functional red (error)     */
+
+  --line: 1px solid var(--grey-200);
+  --line-strong: 2px solid var(--black);
+
+  --mono: "SFMono-Regular", "JetBrains Mono", "Consolas", "Menlo", monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue",
+          Arial, sans-serif;
+
+  --ease: 140ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--white);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every element is square-edged by design. */
+* { border-radius: 0 !important; }
+
+/* CRITICAL: several elements below (.empty-state, .loading-state) set their
+   own `display` value (e.g. `display: flex`) so their contents lay out
+   correctly when shown. Because an author-stylesheet rule with a class
+   selector has the same specificity as the browser's built-in
+   `[hidden] { display: none }` rule, without this override those elements
+   would stay visibly displayed even after JavaScript sets their `hidden`
+   attribute - the toggle would work in the DOM but not on screen. This rule
+   forces `[hidden]` to always win, regardless of any other display rule. */
+[hidden] { display: none !important; }
+
+h2 {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin: 0;
+}
+
+/* ------------------------------- Masthead ------------------------------- */
+.masthead {
+  border-bottom: var(--line-strong);
+  background: var(--white);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.masthead-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 16px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand-mark {
+  width: 34px; height: 34px;
+  fill: none;
+  stroke: var(--black);
+  stroke-width: 2;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+}
+.brand-mark rect { fill: var(--black); stroke: none; }
+.brand-name { font-weight: 800; font-size: 18px; letter-spacing: -0.01em; }
+.brand-sub { font-size: 12px; color: var(--grey-600); }
+
+.status-pill {
+  display: flex; align-items: center; gap: 8px;
+  border: var(--line-strong);
+  padding: 6px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.status-dot {
+  width: 9px; height: 9px;
+  background: var(--grey-400);
+  display: inline-block;
+}
+.status-pill.ok .status-dot { background: var(--ok); }
+.status-pill.mock .status-dot { background: var(--black); }
+.status-pill.down .status-dot { background: var(--err); }
+
+/* ------------------------------- Layout --------------------------------- */
+.layout {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; }
+}
+
+.panel {
+  border: var(--line-strong);
+  background: var(--white);
+  padding: 20px;
+  min-height: 200px;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.controls { display: flex; align-items: center; gap: 8px; }
+.field-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--grey-600);
+}
+.hint {
+  font-size: 13px;
+  color: var(--grey-600);
+  margin: 0 0 14px;
+}
+
+/* ------------------------------- Inputs --------------------------------- */
+.select {
+  font-family: var(--mono);
+  font-size: 13px;
+  border: var(--line-strong);
+  background: var(--white);
+  color: var(--ink);
+  padding: 7px 10px;
+  cursor: pointer;
+  transition: background var(--ease);
+}
+.select:hover { background: var(--grey-100); }
+
+.code-area {
+  width: 100%;
+  height: 420px;
+  resize: vertical;
+  border: var(--line-strong);
+  padding: 14px;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--grey-100);
+  tab-size: 2;
+  outline: none;
+  transition: background var(--ease);
+}
+.code-area:focus { background: var(--white); }
+
+/* ------------------------------- Actions -------------------------------- */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 11px 18px;
+  border: var(--line-strong);
+  background: var(--white);
+  color: var(--black);
+  cursor: pointer;
+  transition: background var(--ease), color var(--ease), transform var(--ease);
+}
+.btn:active { transform: translateY(1px); }
+.btn-icon {
+  width: 18px; height: 18px;
+  fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter;
+}
+.btn-primary { background: var(--black); color: var(--white); }
+.btn-primary:hover { background: var(--grey-900); }
+.btn-primary:disabled {
+  background: var(--grey-400);
+  border-color: var(--grey-400);
+  cursor: not-allowed;
+}
+.btn-ghost:hover { background: var(--grey-100); }
+
+.inline-error { color: var(--err); font-size: 13px; font-weight: 600; }
+
+/* --------------------------- Output states ------------------------------ */
+.empty-state, .loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 60px 20px;
+  color: var(--grey-600);
+  text-align: center;
+}
+.empty-mark {
+  width: 72px; height: 72px;
+  fill: none; stroke: var(--grey-400);
+  stroke-width: 2; stroke-linecap: square; stroke-linejoin: miter;
+}
+
+/* Indeterminate progress bar (sharp, monochrome). */
+.loading-state .bar {
+  width: 100%;
+  height: 6px;
+  background: var(--grey-200);
+  position: relative;
+  overflow: hidden;
+}
+.loading-state .bar::after {
+  content: "";
+  position: absolute;
+  left: -40%;
+  top: 0;
+  height: 100%;
+  width: 40%;
+  background: var(--black);
+  animation: slide 1s linear infinite;
+}
+@keyframes slide {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+
+/* ------------------------------- Metrics -------------------------------- */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: var(--line-strong);
+  margin-bottom: 16px;
+}
+.metric {
+  padding: 14px 12px;
+  border-right: var(--line);
+  text-align: left;
+}
+.metric:last-child { border-right: none; }
+.metric-value {
+  font-family: var(--mono);
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+.metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--grey-600);
+  margin-top: 6px;
+}
+@media (max-width: 520px) {
+  .metrics { grid-template-columns: repeat(2, 1fr); }
+  .metric:nth-child(2) { border-right: none; }
+}
+
+/* ----------------------------- Validation ------------------------------- */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: var(--line-strong);
+  font-weight: 700;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+.banner.valid { border-color: var(--ok); color: var(--ok); }
+.banner.invalid { border-color: var(--err); color: var(--err); }
+.banner::before {
+  content: "";
+  width: 12px; height: 12px;
+  display: inline-block;
+}
+.banner.valid::before { background: var(--ok); }
+.banner.invalid::before { background: var(--err); }
+
+.issues {
+  border: var(--line);
+  margin-bottom: 16px;
+}
+.issues-head {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 12px;
+  background: var(--grey-100);
+  border-bottom: var(--line);
+}
+.issues ul { list-style: none; margin: 0; padding: 0; }
+.issues li {
+  padding: 9px 12px;
+  border-bottom: var(--line);
+  font-size: 13px;
+  display: flex;
+  gap: 10px;
+}
+.issues li:last-child { border-bottom: none; }
+.sev {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  align-self: flex-start;
+  color: var(--white);
+}
+.sev.error { background: var(--err); }
+.sev.warning { background: var(--black); }
+
+/* ------------------------------- Table ---------------------------------- */
+.table-wrap { border: var(--line-strong); overflow-x: auto; }
+.steps-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.steps-table thead th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 10px 12px;
+  background: var(--black);
+  color: var(--white);
+  white-space: nowrap;
+}
+.steps-table th.num, .steps-table td.num { text-align: right; }
+.steps-table tbody td {
+  padding: 9px 12px;
+  border-bottom: var(--line);
+  vertical-align: top;
+}
+.steps-table tbody tr:last-child td { border-bottom: none; }
+.steps-table tbody tr:hover { background: var(--grey-100); }
+
+/* Step-type tag: monochrome, square, uppercase mono. */
+.type-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  border: var(--line-strong);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+.uds { font-family: var(--mono); color: var(--grey-600); }
+.ecu { font-family: var(--mono); font-weight: 700; }
+
+.provider-tag {
+  font-family: var(--mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: var(--line);
+  padding: 4px 8px;
+  color: var(--grey-600);
+}
+.provider-tag-fallback {
+  border: var(--line-strong);
+  border-color: var(--err);
+  color: var(--err);
+}
+
+/* The generator's free-text notes (e.g. a fallback explanation) shown
+   beneath the step table so nothing is ever hidden from the user. */
+.program-notes {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: var(--line);
+  font-size: 12px;
+  color: var(--grey-600);
+  font-family: var(--mono);
+}
+
+/* ------------------------------- Footer --------------------------------- */
+.footer {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 20px 24px 40px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--grey-400);
+  font-family: var(--mono);
+  flex-wrap: wrap;
+}

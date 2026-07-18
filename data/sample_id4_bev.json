@@ -1,0 +1,64 @@
+{
+  "vehicle_id": "WVWZZZ-ID4-2026-000734",
+  "model": "ID.4",
+  "model_year": 2026,
+  "configuration": {
+    "drivetrain": "BEV",
+    "battery": "77kWh",
+    "market": "EU",
+    "driver_assistance": "Travel Assist",
+    "heat_pump": "yes"
+  },
+  "process_standards": [
+    "Security access required before any flash or parameter write.",
+    "High-voltage ECUs must be validated before fault memory is cleared.",
+    "Final network validation is mandatory for BEV vehicles."
+  ],
+  "ecus": [
+    {
+      "ecu_id": "BMS",
+      "name": "Battery Management System",
+      "part_number": "1EA-915-181-A",
+      "supplier": "Bosch",
+      "software_version": "H12",
+      "target_software_version": "H15",
+      "supported_uds_services": ["0x10", "0x27", "0x34", "0x36", "0x2E", "0x22", "0x14"]
+    },
+    {
+      "ecu_id": "PEU",
+      "name": "Power Electronics Unit",
+      "part_number": "1EA-907-411-C",
+      "supplier": "Valeo",
+      "software_version": "K07",
+      "target_software_version": "K07",
+      "supported_uds_services": ["0x10", "0x27", "0x2E", "0x22", "0x31"]
+    },
+    {
+      "ecu_id": "BCM",
+      "name": "Body Control Module",
+      "part_number": "5H0-937-089",
+      "supplier": "Continental",
+      "software_version": "0345",
+      "target_software_version": "0361",
+      "supported_uds_services": ["0x10", "0x27", "0x34", "0x36", "0x2E", "0x22", "0x14"]
+    },
+    {
+      "ecu_id": "GATEWAY",
+      "name": "Central Gateway",
+      "part_number": "5H0-907-468",
+      "supplier": "Continental",
+      "software_version": "2210",
+      "target_software_version": "2210",
+      "supported_uds_services": ["0x10", "0x22", "0x14", "0x31"]
+    },
+    {
+      "ecu_id": "THERMAL",
+      "name": "Thermal Management (Heat Pump) Controller",
+      "part_number": "1EA-816-741",
+      "supplier": "Hanon",
+      "software_version": "A03",
+      "target_software_version": "A05",
+      "supported_uds_services": ["0x10", "0x27", "0x34", "0x36", "0x2E", "0x22"]
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Core web framework
+fastapi>=0.139.2
+uvicorn[standard]>=0.51.0
+
+# Settings & validation
+pydantic>=2.13.4
+pydantic-settings>=2.14.2
+
+# HTTP client for calling OpenAI-compatible LLM endpoints
+httpx>=0.28.1
+
+# Testing
+pytest>=9.1.1

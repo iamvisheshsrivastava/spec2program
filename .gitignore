@@ -1,0 +1,38 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
+install_log*.txt
+
+# ---- Virtual environments ----
+.venv/
+venv/
+env/
+
+# ---- Environment / secrets ----
+# NEVER commit real API keys. Only .env.example is tracked.
+.env
+*.env
+!.env.example
+
+# ---- Generated / runtime output ----
+output/
+*.log
+
+# ---- Editor / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# ---- Claude / local agent ----
+.claude/
+CLAUDE.md

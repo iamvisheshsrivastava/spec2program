@@ -1,0 +1,22 @@
+# ============================================================================
+# spec2program - Local development / self-hosted deployment
+# ----------------------------------------------------------------------------
+# Usage:
+#   docker compose up --build
+# Then open http://localhost:8000
+# ============================================================================
+services:
+  spec2program:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      # Reads from a local .env file if present (see .env.example).
+      # Defaults to mock mode so it runs with zero configuration.
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - CORS_ORIGINS=${CORS_ORIGINS:-*}
+    restart: unless-stopped

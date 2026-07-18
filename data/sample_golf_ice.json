@@ -1,0 +1,55 @@
+{
+  "vehicle_id": "WVWZZZ-GOLF-2026-051288",
+  "model": "Golf",
+  "model_year": 2026,
+  "configuration": {
+    "drivetrain": "ICE",
+    "engine": "1.5 TSI",
+    "transmission": "DSG",
+    "market": "EU",
+    "infotainment": "MIB3"
+  },
+  "process_standards": [
+    "Security access required before any flash or parameter write.",
+    "Engine control unit must be flashed before transmission coding.",
+    "Program must end with fault-code clear and final validation."
+  ],
+  "ecus": [
+    {
+      "ecu_id": "ECM",
+      "name": "Engine Control Module",
+      "part_number": "06L-906-026",
+      "supplier": "Bosch",
+      "software_version": "S18",
+      "target_software_version": "S21",
+      "supported_uds_services": ["0x10", "0x27", "0x34", "0x36", "0x2E", "0x22", "0x14"]
+    },
+    {
+      "ecu_id": "TCM",
+      "name": "Transmission Control Module (DSG)",
+      "part_number": "0GC-927-158",
+      "supplier": "Continental",
+      "software_version": "D42",
+      "target_software_version": "D42",
+      "supported_uds_services": ["0x10", "0x27", "0x2E", "0x22"]
+    },
+    {
+      "ecu_id": "MIB3",
+      "name": "Infotainment Head Unit",
+      "part_number": "5H0-035-020",
+      "supplier": "Harman",
+      "software_version": "1120",
+      "target_software_version": "1145",
+      "supported_uds_services": ["0x10", "0x34", "0x36", "0x22", "0x14"]
+    },
+    {
+      "ecu_id": "ABS",
+      "name": "ABS / ESC Control Unit",
+      "part_number": "5Q0-907-379",
+      "supplier": "Bosch",
+      "software_version": "V09",
+      "target_software_version": "V09",
+      "supported_uds_services": ["0x10", "0x27", "0x2E", "0x22", "0x31"]
+    }
+  ]
+}
