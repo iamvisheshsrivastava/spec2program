@@ -112,5 +112,11 @@ def index() -> FileResponse:
     return FileResponse(FRONTEND_DIR / "index.html")
 
 
+@app.get("/about")
+def about() -> FileResponse:
+    """Serve the About / How it works page."""
+    return FileResponse(FRONTEND_DIR / "about.html")
+
+
 # Mount the rest of the frontend assets (styles.css, app.js) as static files.
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")

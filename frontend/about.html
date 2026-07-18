@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>About — spec2program</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="masthead">
+    <div class="masthead-inner">
+      <a href="/" class="brand" style="text-decoration:none;color:inherit;">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="1" y="1" width="12" height="12" />
+          <path d="M15 7 H27 M15 12 H23" />
+          <path d="M15 20 H31 M15 25 H27 M15 30 H23" />
+          <rect x="1" y="18" width="12" height="12" />
+        </svg>
+        <div>
+          <div class="brand-name">spec2program</div>
+          <div class="brand-sub">AI-assisted vehicle commissioning</div>
+        </div>
+      </a>
+      <nav class="masthead-nav">
+        <a href="/" class="nav-link">← Back to the tool</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="about-main">
+    <article class="about-article">
+
+      <h1>What this is</h1>
+      <p>
+        <strong>spec2program</strong> is a prototype that turns a structured vehicle
+        specification into a validated <em>commissioning program</em> — the ordered
+        sequence of diagnostic actions (open a session, unlock security access,
+        flash software, write configuration, validate, clear fault codes) that
+        brings a vehicle's electronics into a defined, tested state at the end of
+        the production line.
+      </p>
+      <p>
+        It exists to explore one specific idea: today, programs for vehicle
+        commissioning are created from specifications that pass through many
+        organisational and technical hand-offs. Every hand-off is a place where
+        errors creep in, and those errors directly cost cycle time, production
+        stability, and commissioning quality. This tool asks whether an AI model,
+        constrained by an explicit rule-based safety check, can remove some of
+        that risk automatically.
+      </p>
+
+      <h1>How it works</h1>
+      <ol class="about-steps">
+        <li>
+          <strong>Input — the specification.</strong> A JSON document bundling the
+          heterogeneous sources that actually drive commissioning: the bill of
+          materials (which ECUs are present, their part numbers and current/target
+          software versions), the vehicle configuration (drivetrain, market,
+          options), which UDS (Unified Diagnostic Services, ISO 14229) each ECU
+          supports, and the process standards that must be honoured (e.g. "security
+          access must precede any flash").
+        </li>
+        <li>
+          <strong>Generate — the program.</strong> The specification is handed to
+          an LLM (or, with no API key configured, a deterministic offline
+          rule-based planner) with instructions to produce an ordered program:
+          which UDS action to take on which ECU, and in what order, respecting
+          the safety and dependency rules above.
+        </li>
+        <li>
+          <strong>Validate — never trust blindly.</strong> The generated program is
+          checked against the original specification before it's shown as
+          "passed": every ECU and UDS service referenced must actually exist and
+          be supported, security access must come before any flash or parameter
+          write on the same ECU, step dependencies must resolve, and every ECU
+          that needs a software update must actually get flashed. If the model's
+          output fails any of this, the failure is shown explicitly — errors and
+          warnings, not a silent pass.
+        </li>
+        <li>
+          <strong>Analyse — where's the optimisation potential.</strong> The
+          validated program is summarised into concrete numbers: total steps,
+          estimated cycle time, how many of the vehicle's ECUs were touched, and
+          how many steps have no dependency on each other (a proxy for what could
+          run in parallel on multi-channel tester hardware).
+        </li>
+      </ol>
+
+      <h1>Resilience</h1>
+      <p>
+        A real LLM call can fail for reasons outside anyone's control — a network
+        hiccup, a rate limit, a model that returns malformed JSON. Rather than
+        surfacing a hard error, the pipeline falls back to the offline
+        rule-based planner automatically and says so plainly in the result — the
+        product is designed to degrade visibly, never silently.
+      </p>
+
+      <h1>What it is not</h1>
+      <p>
+        This is a prototype built to explore the problem shape, not a
+        production commissioning system. The sample vehicle data (ECUs, part
+        numbers, UDS service lists) is realistic but invented — it is not real
+        manufacturer data. The rule-based validator encodes a small, illustrative
+        set of safety and structural checks, not a complete specification of
+        real commissioning process standards.
+      </p>
+
+      <h1>Stack</h1>
+      <p>
+        Python, FastAPI backend; a dependency-free HTML/CSS/JS frontend served by
+        the same backend so the whole thing ships as one deployable container;
+        pluggable LLM backend (offline mock, or any OpenAI-compatible endpoint —
+        currently wired to OpenRouter); pytest test suite; Docker + Docker
+        Compose for deployment.
+      </p>
+
+      <p class="about-links">
+        <a href="https://github.com/iamvisheshsrivastava/spec2program" target="_blank" rel="noopener">Source on GitHub</a>
+        &nbsp;·&nbsp;
+        <a href="https://visheshsrivastava.com" target="_blank" rel="noopener">Vishesh Srivastava</a>
+      </p>
+
+    </article>
+  </main>
+
+  <footer class="footer">
+    <span>spec2program · prototype</span>
+    <span>Runs offline in mock mode · plug in any OpenAI-compatible model</span>
+  </footer>
+</body>
+</html>

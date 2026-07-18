@@ -23,12 +23,29 @@
           <div class="brand-sub">AI-assisted vehicle commissioning</div>
         </div>
       </div>
+      <nav class="masthead-nav">
+        <a href="/about" class="nav-link">About / How it works</a>
+      </nav>
       <div class="status-pill" id="statusPill">
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">connecting…</span>
       </div>
     </div>
   </header>
+
+  <!-- ===================== HOW IT WORKS (collapsible) ===================== -->
+  <div class="howitworks-wrap">
+    <details class="howitworks">
+      <summary>How this works (click to expand)</summary>
+      <ol class="howitworks-steps">
+        <li><strong>Input.</strong> A structured vehicle specification: the bill of materials (ECUs), vehicle configuration, the UDS diagnostic services each ECU supports, current vs. target software versions, and process standards to honour.</li>
+        <li><strong>Generate.</strong> The spec is sent to an LLM (or the offline rule-based planner if no model is configured), which plans an ordered commissioning program: open a diagnostic session, unlock security access, flash software, write parameters, validate, clear fault codes.</li>
+        <li><strong>Validate.</strong> The generated program is checked against the original spec: every ECU/UDS reference must actually exist and be supported, security access must precede any flash or write, and dependencies must resolve. The generator's output is never trusted blindly.</li>
+        <li><strong>Analyse.</strong> Cycle-time estimate, step-type breakdown, ECU coverage, and parallelisation headroom are computed to surface optimisation potential.</li>
+      </ol>
+      <p class="howitworks-more"><a href="/about">Full write-up on the About page →</a></p>
+    </details>
+  </div>
 
   <main class="layout">
     <!-- ===================== LEFT: INPUT ===================== -->
