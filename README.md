@@ -17,6 +17,7 @@ a small regression model trained on run-log data rather than a hardcoded
 table. The generator is pluggable: it runs fully offline with a deterministic
 rule-based planner, or against any OpenAI-compatible LLM.
 
+![CI](https://github.com/iamvisheshsrivastava/spec2program/actions/workflows/ci.yml/badge.svg)
 ![status: prototype](https://img.shields.io/badge/status-prototype-black)
 ![python](https://img.shields.io/badge/python-3.11-black)
 ![license](https://img.shields.io/badge/license-MIT-black)
@@ -54,9 +55,11 @@ standards — not a toy.
 | **Validate** | Rule-based checks: unknown ECUs, unsupported UDS services, unsafe ordering, missing coverage, broken dependencies. |
 | **Self-repair** | If validation fails, the validator's findings and the failed program are fed back to the LLM (up to 2 rounds) so it corrects its own mistakes. |
 | **Estimate** | Step durations come from a regression model trained on run-log data (`backend/duration_model.py`), not a hardcoded table. |
-| **Optimise** | A critical-path scheduler (`backend/scheduler.py`) computes the true minimum cycle time under parallel execution, vs. the naive sequential total. |
+| **Optimise** | A critical-path scheduler (`backend/scheduler.py`) computes the true minimum cycle time under *unlimited* parallel execution, vs. the naive sequential total - shown as a Gantt chart in the UI. |
+| **Channel-constrain** | The same scheduler also answers the practical question: given exactly *N* tester channels, what's the real cycle time and which step runs on which channel? Includes a channels-1-to-16 sweep to show diminishing returns. |
 | **Analyse** | Cycle-time estimate, step-type breakdown, ECU coverage, and parallelisation headroom. |
 | **Batch** | `/api/batch` runs the full pipeline over a fleet of specs and rolls results up into fleet-level bottleneck findings. |
+| **Recover** | `/api/recover` handles the *other* kind of corrective action: a step that failed at runtime on the actual line. Given the program, which step failed, and why, it generates and validates a short corrective retry sub-program. |
 | **Export** | `/api/export/otx` renders a program as an OTX-style (ISO 13209) XML procedure a real tester tool could load. |
 
 The **validation** layer is deliberate: an LLM can produce a plausible program
@@ -86,16 +89,23 @@ model a bounded chance to fix what it got wrong before accepting the result.
 
 - **`backend/`** — FastAPI service. Thin routes; all logic in small, testable
   modules (`models`, `llm_service`, `generator`, `validator`, `analytics`,
-  `scheduler`, `duration_model`, `batch`, `otx_export`).
+  `scheduler`, `duration_model`, `batch`, `otx_export`, `recovery`).
 - **`frontend/`** — dependency-free single-page UI (HTML/CSS/JS), served by the
-  backend so the whole product is **one deployable container**.
-- **`data/`** — realistic sample specs (a BEV `ID.4` and an ICE `Golf`), plus
-  the trained `duration_model.json`.
-- **`scripts/`** — `train_duration_model.py` (fits the duration model on a
-  synthetic run-log stand-in) and `eval_harness.py` (measures LLM validity
-  rate, with and without the self-repair loop, across randomised specs).
-- **`tests/`** — pytest suite covering the generator, validator, scheduler,
-  self-repair loop, batch mode, duration model, and OTX export.
+  backend so the whole product is **one deployable container**. Includes a
+  Gantt chart, a channel-count control with live re-scheduling, a
+  channel-count-vs-cycle-time sweep chart, and a runtime-failure recovery
+  simulator.
+- **`data/`** — realistic sample specs (a BEV `ID.4` and an ICE `Golf`), the
+  trained `duration_model.json`, and `eval_report.md` (harness output).
+- **`scripts/`** — `train_duration_model.py` (AutoML: fits and cross-validates
+  several duration-model candidates on a synthetic run-log stand-in, keeps
+  the best) and `eval_harness.py` (measures LLM validity rate, with and
+  without the self-repair loop, across randomised specs).
+- **`tests/`** — pytest suite covering the generator, validator, critical-path
+  and channel schedulers, self-repair loop, batch mode, duration model,
+  runtime recovery, and OTX export.
+- **`.github/workflows/ci.yml`** — GitHub Actions: runs the full test suite on
+  every push/PR, on Python 3.11 and 3.12.
 
 The generator depends only on a small `LLMProvider` interface, so the model
 backend is swapped through configuration — no code changes.
@@ -154,6 +164,9 @@ mock mode instead of crashing.
 | `GET`  | `/api/samples/{file}` | Fetch one sample spec. |
 | `POST` | `/api/generate` | Generate + self-repair + validate + optimise + analyse a program. |
 | `POST` | `/api/batch` | Run the pipeline over a fleet of specs and return a rollup. |
+| `POST` | `/api/optimize/channels` | Schedule an existing program under a finite tester-channel count. |
+| `POST` | `/api/optimize/channel-sweep` | Cycle time for channel counts 1..N, to plot diminishing returns. |
+| `POST` | `/api/recover` | Given a program, a failed step, and why it failed, generate a validated corrective retry sub-program. |
 | `POST` | `/api/export/otx` | Export a `CommissioningProgram` as OTX-style XML. |
 
 Interactive API docs are available at `/docs` (Swagger UI, provided by FastAPI).
@@ -217,6 +230,73 @@ It writes a short report to `data/eval_report.md` with the validity rate
 (first attempt vs. after repair) per provider, so "does self-repair actually
 help" is an answered, reproducible question rather than an assumption.
 
+**Latest run** (seed 42, `anthropic/claude-sonnet-5` via OpenRouter): the mock
+planner is 50/50 valid by construction; the real LLM was 10/10 valid on the
+*first* attempt across 10 randomised specs, so the self-repair loop had
+nothing to fix on this particular sample - itself a useful, honest data point
+(the model is already reliable on structurally-typical specs; the loop exists
+for the harder tail, which a larger `--live-n` run would be needed to surface
+reliably). See `data/eval_report.md` for the full, reproducible table.
+
+---
+
+## AutoML for duration estimates
+
+`scripts/train_duration_model.py` doesn't just fit one hand-picked model. It
+fits three candidate feature sets - a per-step-type mean baseline, a linear
+flash-size term, and a quadratic flash-size term - scores each with 5-fold
+cross-validation, and automatically keeps whichever generalises best. On the
+current synthetic dataset the plain linear model wins (CV MAE ≈1.46s vs.
+≈1.64s for the mean baseline and ≈1.46s for the quadratic term, which
+overfits without improving on held-out folds). Every candidate's score is
+written to `data/duration_model.json` alongside the winner, and surfaced at
+`GET /api/health` → `duration_model.automl`, so the selection is auditable,
+not just asserted.
+
+This is deliberately small in scope - automated selection over a handful of
+interpretable candidates, not neural-architecture search - but it is
+genuinely automated, and the same harness scales to more candidates (a
+decision tree, a small MLP) without changing how the rest of the pipeline
+consumes the model.
+
+---
+
+## Finite tester-channel scheduling
+
+The critical-path optimiser answers "what's the theoretical floor with
+infinite parallel hardware" - useful as a ceiling, not actionable on its own.
+`backend/scheduler.schedule_with_channels()` answers the practical question:
+given exactly *N* tester channels, what's the real cycle time, and which step
+runs on which channel? This is resource-constrained project scheduling
+(NP-hard in general); the implementation uses the same class of heuristic
+real RCPS tooling uses - greedy list scheduling, assigning each
+dependency-ready step to whichever channel frees up soonest. `channel_sweep()`
+runs this for every channel count from 1 to N and returns the resulting
+curve, so "how many channels before adding more stops helping" becomes a
+direct, visual answer (rendered as a bar chart in the UI) rather than
+something you'd have to reason about by hand.
+
+---
+
+## Runtime corrective actions
+
+Self-repair (above) handles a *planning-time* failure: the LLM produced a
+program that doesn't validate, before the vehicle ever reaches the line. The
+JD's task list also names corrective actions as an optimisation target more
+broadly, which includes a different, *runtime* failure: a step that actually
+executed on the line and failed. `POST /api/recover` handles that case -
+given the program, which step failed, and a free-text reason (communication
+timeout, security access denied, flash verification failed, ...), it
+classifies the likely missing precondition, generates a short corrective
+retry sub-program (LLM-backed, e.g. "re-open the diagnostic session, then
+retry" or "re-establish security access, then retry"), and validates it
+against the spec and the ECU's *actual* unlock state at the moment of
+failure - not a fresh full-program validation, since most of the original
+program already ran. If no real LLM is configured or the call fails, a
+deterministic keyword-based recovery policy takes over, so this endpoint
+never hard-fails either. Try it in the UI's "Simulate a step failure &
+recover" panel after generating a program.
+
 ---
 
 ## From UDS to SOVD
@@ -265,13 +345,18 @@ here — it's built for serverless functions, not a persistent Python process.
 
 ## Roadmap
 
-- Constraint-solver pass that also accounts for a *finite* number of physical
-  tester channels (the current scheduler assumes unlimited parallelism).
-- Retrain the duration model on real commissioning telemetry once available,
-  replacing the synthetic stand-in dataset.
+- Retrain the duration model (and re-run AutoML selection) on real
+  commissioning telemetry once available, replacing the synthetic stand-in
+  dataset.
 - Diff view: compare a generated program against a previously approved one.
 - Richer process-standard DSL, checked automatically by the validator.
 - SOVD support alongside UDS (see above).
+- An optimal (not just greedy-heuristic) solver for the channel-constrained
+  scheduling problem - e.g. via constraint programming (OR-Tools' CP-SAT) -
+  with the current greedy list-scheduler kept as a fast baseline to compare
+  against.
+- A recovery-policy library learned from actual recovery outcomes on the
+  line, rather than the current single-shot LLM/keyword-heuristic approach.
 
 ---
 

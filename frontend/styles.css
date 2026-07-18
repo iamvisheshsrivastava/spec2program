@@ -497,6 +497,96 @@ h2 {
 /* ------------------------------ Small button ----------------------------- */
 .btn-small { padding: 8px 14px; font-size: 12px; }
 
+/* -------------------------- Schedule / Gantt ------------------------------ */
+.schedule-block {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 2px solid var(--black);
+}
+.schedule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  margin-bottom: 12px;
+}
+.schedule-controls { display: flex; align-items: center; gap: 8px; font-weight: 400; text-transform: none; letter-spacing: normal; }
+.channel-input {
+  width: 56px;
+  padding: 6px 8px;
+  border: 2px solid var(--black);
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--white);
+}
+.gantt { display: flex; flex-direction: column; gap: 6px; overflow-x: auto; }
+.gantt-row { display: flex; align-items: center; gap: 10px; }
+.gantt-label {
+  flex: 0 0 90px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--grey-600);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gantt-track {
+  position: relative;
+  flex: 1 1 auto;
+  height: 22px;
+  background: var(--grey-100);
+  min-width: 300px;
+}
+.gantt-bar {
+  position: absolute;
+  top: 2px;
+  height: 18px;
+  background: var(--black);
+  color: var(--white);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 18px;
+  padding: 0 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.gantt-bar.critical { background: var(--err); }
+
+.sweep-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 140px;
+  margin-top: 14px;
+  border-bottom: 2px solid var(--black);
+  padding: 0 4px;
+}
+.sweep-bar-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 4px;
+}
+.sweep-bar { width: 100%; background: var(--black); min-height: 2px; }
+.sweep-bar-label { font-family: var(--mono); font-size: 10px; color: var(--grey-600); }
+
+.recovery-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.recovery-result {
+  margin-top: 14px;
+  border: 2px solid var(--black);
+  padding: 16px;
+}
+.recovery-result .banner { margin-bottom: 12px; }
+
 /* ------------------------------ Batch panel ------------------------------ */
 .batch-wrap {
   max-width: 1280px;

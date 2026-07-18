@@ -141,3 +141,73 @@ def validate_program(
 def is_valid(issues: list[ValidationIssue]) -> bool:
     """A program is 'valid' if it has no error-severity issues."""
     return not any(issue.severity == "error" for issue in issues)
+
+
+def validate_recovery_steps(
+    spec: VehicleSpec,
+    steps: list,
+    *,
+    already_unlocked: set[str] = frozenset(),
+    already_seen_orders: set[int] = frozenset(),
+) -> list[ValidationIssue]:
+    """Validate a short corrective sub-program against the spec.
+
+    A cut-down sibling of ``validate_program`` for the runtime-recovery case
+    (see ``recovery.py``): a recovery sub-program is not a whole program, so
+    it does not need the "ends with clear + validation" structural checks -
+    but it must still only reference real ECUs and supported UDS services,
+    and must still respect the security-access-before-flash/write ordering
+    rule, seeded with whatever the ECU's *actual* unlock state was when the
+    original program failed (``already_unlocked``), and whatever step orders
+    had already run (``already_seen_orders``), so a recovery step is allowed
+    to depend on a step that completed before the failure.
+    """
+    issues: list[ValidationIssue] = []
+    ecu_by_id = {ecu.ecu_id: ecu for ecu in spec.ecus}
+    unlocked = set(already_unlocked)
+    seen = set(already_seen_orders)
+
+    for step in steps:
+        ecu = ecu_by_id.get(step.ecu_id)
+        if ecu is None:
+            issues.append(ValidationIssue(
+                severity="error",
+                step_order=step.order,
+                message=(f"Recovery step {step.order} targets ECU '{step.ecu_id}', which "
+                         f"is not in the vehicle specification."),
+            ))
+            seen.add(step.order)
+            continue
+
+        if step.uds_service and step.uds_service not in ecu.supported_uds_services:
+            issues.append(ValidationIssue(
+                severity="error",
+                step_order=step.order,
+                message=(f"Recovery step {step.order} uses UDS service {step.uds_service} on "
+                         f"'{ecu.ecu_id}', but that ECU does not support it."),
+            ))
+
+        if step.step_type == StepType.SECURITY_ACCESS:
+            unlocked.add(step.ecu_id)
+
+        if step.step_type in (StepType.FLASH_SOFTWARE, StepType.WRITE_PARAMETER):
+            if step.ecu_id not in unlocked and "0x27" in ecu.supported_uds_services:
+                issues.append(ValidationIssue(
+                    severity="error",
+                    step_order=step.order,
+                    message=(f"Recovery step {step.order} ({step.step_type.value}) on "
+                             f"'{ecu.ecu_id}' runs before security access is (re-)established."),
+                ))
+
+        for dep in step.depends_on:
+            if dep not in seen:
+                issues.append(ValidationIssue(
+                    severity="error",
+                    step_order=step.order,
+                    message=(f"Recovery step {step.order} depends on step {dep}, which does "
+                             f"not appear earlier or in the original program's completed steps."),
+                ))
+
+        seen.add(step.order)
+
+    return issues

@@ -9,11 +9,13 @@ dataset standing in for real production telemetry - see
 ``scripts/train_duration_model.py``), so per-step time estimates come from
 data rather than a guess, and can be retrained as real logs accumulate.
 
-The model itself is intentionally simple - ordinary least squares over a
-handful of interpretable features - because interpretability matters more
-than raw accuracy for a system whose numbers feed process-engineering
-decisions. It is not meant to be state-of-the-art AutoML; it is meant to
-demonstrate the *shape* of a data-driven estimate replacing a hardcoded one.
+``scripts/train_duration_model.py`` performs a small, honest AutoML step: it
+fits several candidate feature sets (a per-step-type mean baseline, a linear
+flash-size term, a quadratic flash-size term), scores each with k-fold
+cross-validation, and keeps whichever generalises best. This module only
+needs to know how to rebuild whatever feature vector the *winning* model was
+trained on - stored alongside the weights as ``feature_spec`` - so inference
+stays correct regardless of which candidate won.
 """
 
 from __future__ import annotations
@@ -35,18 +37,46 @@ STEP_TYPES = [
     "fault_clear",
 ]
 
+# The feature set used by any model file saved before AutoML selection was
+# introduced (or by a hand-written test fixture that omits "feature_spec").
+# Keeping this as the default preserves backward compatibility.
+DEFAULT_FEATURE_SPEC = {
+    "onehot": True,
+    "flash_linear": True,
+    "flash_quadratic": False,
+    "bias": True,
+}
+
+
+def build_features(step_type: str, flash_size_proxy: float, feature_spec: dict) -> list[float]:
+    """Build a feature vector for one step, per an explicit feature spec.
+
+    ``feature_spec`` toggles which feature groups are present, so the same
+    function can reconstruct the exact input a model was trained on,
+    whichever of the AutoML candidates it turned out to be:
+      - "onehot": one-hot encoding of step type.
+      - "flash_linear": flash-size proxy (only nonzero for flash_software).
+      - "flash_quadratic": squared flash-size proxy (captures the idea that
+        very large flash payloads take disproportionately longer).
+      - "bias": constant 1.0 term.
+    """
+    feats: list[float] = []
+    if feature_spec.get("onehot", True):
+        feats.extend(1.0 if step_type == t else 0.0 for t in STEP_TYPES)
+
+    is_flash = 1.0 if step_type == "flash_software" else 0.0
+    if feature_spec.get("flash_linear", True):
+        feats.append(is_flash * flash_size_proxy)
+    if feature_spec.get("flash_quadratic", False):
+        feats.append(is_flash * (flash_size_proxy ** 2))
+    if feature_spec.get("bias", True):
+        feats.append(1.0)
+    return feats
+
 
 def features(step_type: str, flash_size_proxy: float) -> list[float]:
-    """Build the feature vector for one step.
-
-    Features: a one-hot encoding of step type, a flash-size proxy (only
-    meaningful for flash_software steps - the length of the target software
-    version string stands in for payload size, since we have no real binary
-    sizes), and a bias term.
-    """
-    onehot = [1.0 if step_type == t else 0.0 for t in STEP_TYPES]
-    flash_term = flash_size_proxy if step_type == "flash_software" else 0.0
-    return [*onehot, flash_term, 1.0]
+    """Backward-compatible feature builder using the default feature spec."""
+    return build_features(step_type, flash_size_proxy, DEFAULT_FEATURE_SPEC)
 
 
 def is_available() -> bool:
@@ -54,19 +84,34 @@ def is_available() -> bool:
     return MODEL_PATH.exists()
 
 
-def _load_weights() -> list[float] | None:
+def _load_model() -> dict | None:
     if not MODEL_PATH.exists():
         return None
-    return json.loads(MODEL_PATH.read_text(encoding="utf-8"))["weights"]
+    return json.loads(MODEL_PATH.read_text(encoding="utf-8"))
 
 
 def predict_seconds(step_type: str, flash_size_proxy: float = 0.0) -> float | None:
     """Predict a step's duration in seconds, or None if no model is trained."""
-    weights = _load_weights()
-    if weights is None:
+    model = _load_model()
+    if model is None:
         return None
-    x = np.array(features(step_type, flash_size_proxy))
+    weights = model["weights"]
+    feature_spec = model.get("feature_spec", DEFAULT_FEATURE_SPEC)
+    x = np.array(build_features(step_type, flash_size_proxy, feature_spec))
     w = np.array(weights)
     predicted = float(np.dot(w, x))
     # Durations can't be negative or implausibly tiny; floor it.
     return max(0.5, predicted)
+
+
+def model_info() -> dict | None:
+    """Return the trained model's metadata (type, AutoML results), if any."""
+    model = _load_model()
+    if model is None:
+        return None
+    return {
+        "model_type": model.get("model_type", "linear (legacy, pre-AutoML)"),
+        "automl": model.get("automl"),
+        "trained_on_rows": model.get("trained_on_rows"),
+        "train_mae_seconds": model.get("train_mae_seconds"),
+    }

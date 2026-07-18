@@ -85,17 +85,24 @@
           accepted or the pipeline gives up and reports what's still wrong.
         </li>
         <li>
-          <strong>Estimate — data, not guesses.</strong> Each step's duration is
-          predicted by a small regression model trained on run-log data (a
-          synthetic stand-in here, meant to be retrained on real telemetry),
-          replacing a hardcoded per-step-type time budget.
+          <strong>Estimate — data, not guesses, chosen automatically.</strong>
+          Each step's duration is predicted by a regression model trained on
+          run-log data (a synthetic stand-in here, meant to be retrained on
+          real telemetry). The training script doesn't commit to one model by
+          hand: it fits three candidate feature sets, scores each with 5-fold
+          cross-validation, and keeps whichever generalises best — a small,
+          honest AutoML step, with every candidate's score recorded for
+          transparency, not just the winner's.
         </li>
         <li>
-          <strong>Optimise — the real cycle time.</strong> A critical-path
-          scheduler computes the minimum possible cycle time if independent
-          steps ran in parallel on multi-channel tester hardware, honouring
-          every dependency — not just the naive sum of every step run
-          back-to-back.
+          <strong>Optimise — the real cycle time, and the practical one.</strong>
+          A critical-path scheduler computes the minimum possible cycle time
+          if independent steps ran on <em>unlimited</em> parallel tester
+          hardware (shown as a Gantt chart) — the theoretical ceiling. A
+          second scheduler then answers the practical question: given exactly
+          <em>N</em> tester channels, what's the real cycle time, and which
+          step runs on which channel? A channel-count sweep (1 to 16) shows
+          exactly where adding more channels stops helping.
         </li>
         <li>
           <strong>Analyse and batch.</strong> Single-vehicle metrics (cycle
@@ -103,6 +110,16 @@
           fleet-level findings when a batch of specs is run together —
           recurring bottleneck ECUs, the most common validation issue, average
           speedup across the fleet.
+        </li>
+        <li>
+          <strong>Recover — corrective actions at runtime, too.</strong>
+          Self-repair (above) fixes a program before the vehicle ever reaches
+          the line. A separate endpoint handles the other case: a step that
+          actually executed and failed on the line. Given the failed step and
+          why, it generates and validates a short corrective retry
+          sub-program — re-open the session, or re-establish security access,
+          then retry — checked against the ECU's actual unlock state at the
+          moment of failure, not a fresh full-program validation.
         </li>
       </ol>
 

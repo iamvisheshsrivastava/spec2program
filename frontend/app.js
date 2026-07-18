@@ -33,11 +33,25 @@ const el = {
   exportOtxBtn: document.getElementById("exportOtxBtn"),
   batchBtn: document.getElementById("batchBtn"),
   batchResult: document.getElementById("batchResult"),
+  ganttUnlimited: document.getElementById("ganttUnlimited"),
+  channelInput: document.getElementById("channelInput"),
+  channelScheduleBtn: document.getElementById("channelScheduleBtn"),
+  channelSweepBtn: document.getElementById("channelSweepBtn"),
+  channelCycleTime: document.getElementById("channelCycleTime"),
+  ganttChannels: document.getElementById("ganttChannels"),
+  channelSweepChart: document.getElementById("channelSweepChart"),
+  failedStepSelect: document.getElementById("failedStepSelect"),
+  failureReasonSelect: document.getElementById("failureReasonSelect"),
+  recoverBtn: document.getElementById("recoverBtn"),
+  recoveryResult: document.getElementById("recoveryResult"),
 };
 
-// The most recently generated program, kept around so "Export OTX" can send
-// it without re-running generation. Cleared whenever the spec changes.
+// The most recently generated program (+ the spec it came from), kept
+// around so Export OTX / channel scheduling / recovery simulation can call
+// their own endpoints without re-running generation. Cleared whenever the
+// spec changes.
 let lastProgram = null;
+let lastSpec = null;
 
 // Human-friendly labels for the machine step-type enum.
 const STEP_LABELS = {
@@ -132,6 +146,7 @@ async function loadSample(filename, { userInitiated = true } = {}) {
   el.providerTag.hidden = true;
   el.exportOtxBtn.hidden = true;
   lastProgram = null;
+  lastSpec = null;
 }
 
 /* ------------------------------- Errors --------------------------------- */
@@ -199,6 +214,7 @@ async function generate() {
     }
 
     const data = await res.json();
+    lastSpec = spec;
     renderResult(data);
     showState("result");
   } catch (err) {
@@ -283,6 +299,76 @@ function renderResult(data) {
     el.programNotes.hidden = true;
     el.programNotes.textContent = "";
   }
+
+  // Unlimited-parallelism Gantt: lanes = ECUs (each ECU's own steps are
+  // strictly sequential; different ECUs can run concurrently under this
+  // scheduler, so grouping by ECU is exactly the right visual mapping).
+  renderGantt(el.ganttUnlimited, program.steps, optimization.schedule, {
+    laneKeyFn: (step) => step.ecu_id,
+    criticalOrders: new Set(optimization.critical_path_steps),
+  });
+
+  // Reset the channel/recovery panels - they describe the previous program.
+  el.channelCycleTime.textContent = "";
+  el.ganttChannels.innerHTML = "";
+  el.channelSweepChart.hidden = true;
+  el.channelSweepChart.innerHTML = "";
+  el.recoveryResult.hidden = true;
+  el.recoveryResult.innerHTML = "";
+
+  // Populate the recovery simulator's step picker.
+  el.failedStepSelect.innerHTML = program.steps
+    .map(
+      (s) =>
+        `<option value="${s.order}">#${s.order} ${esc(STEP_LABELS[s.step_type] || s.step_type)} on ${esc(s.ecu_id)}</option>`
+    )
+    .join("");
+}
+
+/**
+ * Render a Gantt chart into `container` from a list of steps and a matching
+ * start/end schedule (either the unlimited-parallelism schedule or a
+ * channel-constrained one). `opts.laneKeyFn(step)` decides which row a step
+ * lands on; `opts.criticalOrders` (optional) highlights bars on the
+ * critical path in red.
+ */
+function renderGantt(container, steps, schedule, opts = {}) {
+  const { laneKeyFn, criticalOrders } = opts;
+  const byOrder = new Map(schedule.map((s) => [s.order, s]));
+  const maxEnd = Math.max(1, ...schedule.map((s) => s.end));
+
+  // Group steps into lanes, preserving first-seen lane order.
+  const lanes = new Map(); // laneKey -> [steps]
+  steps.forEach((step) => {
+    const key = laneKeyFn(step);
+    if (!lanes.has(key)) lanes.set(key, []);
+    lanes.get(key).push(step);
+  });
+
+  container.innerHTML = Array.from(lanes.entries())
+    .map(([laneKey, laneSteps]) => {
+      const bars = laneSteps
+        .map((step) => {
+          const timing = byOrder.get(step.order);
+          if (!timing) return "";
+          const left = (timing.start / maxEnd) * 100;
+          const width = Math.max(0.6, ((timing.end - timing.start) / maxEnd) * 100);
+          const critical = criticalOrders && criticalOrders.has(step.order) ? "critical" : "";
+          const label = STEP_LABELS[step.step_type] || step.step_type;
+          return `
+            <div class="gantt-bar ${critical}" style="left:${left}%;width:${width}%"
+                 title="#${esc(step.order)} ${esc(label)} (${esc(timing.start)}s - ${esc(timing.end)}s)${step.channel !== undefined ? ` · channel ${esc(step.channel)}` : ""}">
+              ${esc(label)}
+            </div>`;
+        })
+        .join("");
+      return `
+        <div class="gantt-row">
+          <div class="gantt-label">${esc(laneKey)}</div>
+          <div class="gantt-track">${bars}</div>
+        </div>`;
+    })
+    .join("");
 }
 
 function metric(value, label) {
@@ -331,6 +417,7 @@ el.specInput.addEventListener("input", () => {
     el.providerTag.hidden = true;
     el.exportOtxBtn.hidden = true;
     lastProgram = null;
+    lastSpec = null;
   }
 });
 
@@ -412,6 +499,127 @@ function renderBatch(data) {
         ? `<p class="hint">Most common validation finding: ${esc(a.most_common_issue)}</p>`
         : ""
     }
+  `;
+}
+
+/* --------------------------- Channel scheduling -------------------------- */
+el.channelScheduleBtn.addEventListener("click", async () => {
+  if (!lastProgram) return setError("Generate a program first.");
+  const channels = Math.max(1, parseInt(el.channelInput.value, 10) || 1);
+  try {
+    const res = await fetch("/api/optimize/channels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ program: lastProgram, channels }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
+    }
+    const data = await res.json();
+    el.channelCycleTime.textContent =
+      `With ${data.channels} channel(s): cycle time ${formatTime(data.cycle_time_seconds)}.`;
+    renderGantt(el.ganttChannels, lastProgram.steps, data.schedule, {
+      laneKeyFn: (step) => {
+        const timing = data.schedule.find((s) => s.order === step.order);
+        return timing ? `Channel ${timing.channel}` : "?";
+      },
+    });
+  } catch (err) {
+    setError(err.message);
+  }
+});
+
+el.channelSweepBtn.addEventListener("click", async () => {
+  if (!lastProgram) return setError("Generate a program first.");
+  try {
+    const res = await fetch("/api/optimize/channel-sweep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ program: lastProgram, max_channels: 16 }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
+    }
+    const data = await res.json();
+    const maxTime = Math.max(1, ...data.points.map((p) => p.cycle_time_seconds));
+    el.channelSweepChart.hidden = false;
+    el.channelSweepChart.innerHTML = data.points
+      .map((p) => {
+        const heightPct = Math.max(2, (p.cycle_time_seconds / maxTime) * 100);
+        return `
+          <div class="sweep-bar-wrap" title="${esc(p.channels)} channel(s): ${esc(p.cycle_time_seconds)}s">
+            <div class="sweep-bar" style="height:${heightPct}%"></div>
+            <div class="sweep-bar-label">${esc(p.channels)}</div>
+          </div>`;
+      })
+      .join("");
+  } catch (err) {
+    setError(err.message);
+  }
+});
+
+/* ------------------------------- Recovery -------------------------------- */
+el.recoverBtn.addEventListener("click", async () => {
+  if (!lastProgram || !lastSpec) return setError("Generate a program first.");
+  const failedStepOrder = parseInt(el.failedStepSelect.value, 10);
+  const failureReason = el.failureReasonSelect.value;
+  el.recoveryResult.hidden = false;
+  el.recoveryResult.innerHTML = `<p class="hint">Generating recovery…</p>`;
+  try {
+    const res = await fetch("/api/recover", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        spec: lastSpec,
+        program: lastProgram,
+        failed_step_order: failedStepOrder,
+        failure_reason: failureReason,
+      }),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
+    }
+    const data = await res.json();
+    renderRecovery(data);
+  } catch (err) {
+    el.recoveryResult.innerHTML = `<p class="hint">Recovery failed: ${esc(err.message)}</p>`;
+  }
+});
+
+function renderRecovery(data) {
+  const bannerClass = data.is_valid ? "valid" : "invalid";
+  const bannerText = data.is_valid
+    ? `Recovery generated by provider "${data.provider}" and passed validation.`
+    : `Recovery generated by provider "${data.provider}" but has validation issues.`;
+
+  const stepsRows = data.recovery_steps
+    .map(
+      (step) => `
+        <tr>
+          <td class="num">${esc(step.order)}</td>
+          <td><span class="type-tag">${esc(STEP_LABELS[step.step_type] || step.step_type)}</span></td>
+          <td class="ecu">${esc(step.ecu_id)}</td>
+          <td class="uds">${esc(step.uds_service || "—")}</td>
+          <td>${esc(step.description)}</td>
+        </tr>`
+    )
+    .join("");
+
+  const issuesHtml = data.validation.length
+    ? `<ul>${data.validation.map((i) => `<li><span class="sev ${esc(i.severity)}">${esc(i.severity)}</span> ${esc(i.message)}</li>`).join("")}</ul>`
+    : "";
+
+  el.recoveryResult.innerHTML = `
+    <div class="banner ${bannerClass}">${esc(bannerText)}</div>
+    <table class="steps-table">
+      <thead><tr><th>#</th><th>Type</th><th>ECU</th><th>UDS</th><th>Description</th></tr></thead>
+      <tbody>${stepsRows}</tbody>
+    </table>
+    ${data.notes ? `<p class="program-notes" style="display:block;margin-top:12px;">${esc(data.notes)}</p>` : ""}
+    ${issuesHtml}
   `;
 }
 

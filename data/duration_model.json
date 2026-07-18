@@ -1,13 +1,20 @@
 {
+  "model_type": "linear",
+  "feature_spec": {
+    "onehot": true,
+    "flash_linear": true,
+    "flash_quadratic": false,
+    "bias": true
+  },
   "weights": [
-    -4.880370914465,
-    -3.9192018089038934,
-    21.39681809422537,
-    -2.0440327356055543,
-    0.16295598783206297,
-    -2.8389096416239417,
-    0.9130605569169383,
-    7.877258981459039
+    -4.880370914465018,
+    -3.9192018089039333,
+    21.396818094225445,
+    -2.044032735605576,
+    0.16295598783204004,
+    -2.8389096416239745,
+    0.9130605569169338,
+    7.877258981459059
   ],
   "feature_order": [
     "diagnostic_session",
@@ -16,10 +23,24 @@
     "write_parameter",
     "validation",
     "fault_clear",
-    "flash_size_term",
+    "flash_size_linear",
     "bias"
   ],
   "trained_on_rows": 2400,
   "train_mae_seconds": 1.454,
-  "note": "Trained on a synthetic historical-run-log stand-in (scripts/train_duration_model.py); replace with real telemetry to retrain on actual line data."
+  "automl": {
+    "candidates_evaluated": [
+      "mean_baseline",
+      "linear",
+      "linear_quadratic_flash"
+    ],
+    "cv_mae_by_candidate": {
+      "mean_baseline": 1.642,
+      "linear": 1.459,
+      "linear_quadratic_flash": 1.46
+    },
+    "selection_method": "5-fold cross-validation, lowest mean MAE wins",
+    "selected": "linear"
+  },
+  "note": "Trained on a synthetic historical-run-log stand-in (scripts/train_duration_model.py); replace with real telemetry to retrain on actual line data. Model family chosen automatically via cross-validation over a small candidate pool (see 'automl')."
 }

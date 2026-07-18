@@ -39,9 +39,10 @@
       <summary>How this works (click to expand)</summary>
       <ol class="howitworks-steps">
         <li><strong>Input.</strong> A structured vehicle specification: the bill of materials (ECUs), vehicle configuration, the UDS diagnostic services each ECU supports, current vs. target software versions, and process standards to honour.</li>
-        <li><strong>Generate.</strong> The spec is sent to an LLM (or the offline rule-based planner if no model is configured), which plans an ordered commissioning program: open a diagnostic session, unlock security access, flash software, write parameters, validate, clear fault codes.</li>
-        <li><strong>Validate.</strong> The generated program is checked against the original spec: every ECU/UDS reference must actually exist and be supported, security access must precede any flash or write, and dependencies must resolve. The generator's output is never trusted blindly.</li>
-        <li><strong>Analyse.</strong> Cycle-time estimate, step-type breakdown, ECU coverage, and parallelisation headroom are computed to surface optimisation potential.</li>
+        <li><strong>Generate + self-repair.</strong> The spec is sent to an LLM (or the offline rule-based planner if no model is configured), which plans an ordered commissioning program. If it fails validation, the validator's own findings are sent back to the model for up to two corrective rounds.</li>
+        <li><strong>Validate.</strong> Every ECU/UDS reference must actually exist and be supported, security access must precede any flash or write, and dependencies must resolve. The generator's output is never trusted blindly.</li>
+        <li><strong>Estimate + optimise.</strong> Step durations come from an automatically-selected regression model (AutoML over a few candidates). A critical-path scheduler computes the unlimited-parallelism minimum (shown as a Gantt chart), and a second scheduler computes the real cycle time under a finite tester-channel count you choose.</li>
+        <li><strong>Analyse, batch, and recover.</strong> Cycle-time and coverage metrics roll up across a fleet in batch mode. A separate recovery simulator generates a validated corrective retry sub-program for a step that fails at runtime.</li>
       </ol>
       <p class="howitworks-more"><a href="/about">Full write-up on the About page →</a></p>
     </details>
@@ -136,6 +137,49 @@
 
         <!-- Free-text notes from the generator (e.g. rationale, fallback explanation). -->
         <div id="programNotes" class="program-notes" hidden></div>
+
+        <!-- ============== SCHEDULE / GANTT (unlimited parallelism) ============== -->
+        <div class="schedule-block">
+          <div class="schedule-head">Schedule (unlimited parallel channels, by ECU)</div>
+          <div id="ganttUnlimited" class="gantt"></div>
+        </div>
+
+        <!-- ============== FINITE TESTER-CHANNEL SCHEDULING ============== -->
+        <div class="schedule-block">
+          <div class="schedule-head">
+            Finite tester channels
+            <span class="schedule-controls">
+              <label class="field-label" for="channelInput">Channels</label>
+              <input id="channelInput" class="channel-input" type="number" min="1" max="16" value="2" />
+              <button id="channelScheduleBtn" class="btn btn-ghost btn-small">Schedule</button>
+              <button id="channelSweepBtn" class="btn btn-ghost btn-small">Sweep 1–16</button>
+            </span>
+          </div>
+          <p id="channelCycleTime" class="hint"></p>
+          <div id="ganttChannels" class="gantt"></div>
+          <div id="channelSweepChart" class="sweep-chart" hidden></div>
+        </div>
+
+        <!-- ============== RUNTIME RECOVERY SIMULATOR ============== -->
+        <div class="schedule-block">
+          <div class="schedule-head">Simulate a step failure &amp; recover</div>
+          <p class="hint">
+            Pick a step and a failure reason to see the corrective sub-program
+            the pipeline would generate at runtime (LLM-backed, with a
+            deterministic fallback policy).
+          </p>
+          <div class="recovery-controls">
+            <select id="failedStepSelect" class="select"></select>
+            <select id="failureReasonSelect" class="select">
+              <option value="communication timeout">Communication timeout</option>
+              <option value="security access denied">Security access denied</option>
+              <option value="flash verification failed">Flash verification failed</option>
+              <option value="unexpected negative response">Unexpected negative response</option>
+            </select>
+            <button id="recoverBtn" class="btn btn-ghost btn-small">Generate recovery</button>
+          </div>
+          <div id="recoveryResult" class="recovery-result" hidden></div>
+        </div>
       </div>
     </section>
   </main>

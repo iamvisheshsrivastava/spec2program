@@ -202,6 +202,75 @@ class OptimizationResult(BaseModel):
     )
 
 
+class ChannelScheduledStep(BaseModel):
+    """A step placed on a channel-constrained schedule (finite tester channels)."""
+
+    order: int
+    channel: int = Field(..., description="0-based tester channel this step runs on.")
+    start: float
+    end: float
+
+
+class ChannelScheduleResult(BaseModel):
+    """Result of scheduling a program under a finite number of tester channels."""
+
+    channels: int = Field(..., description="Number of parallel tester channels assumed.")
+    cycle_time_seconds: float
+    schedule: list[ChannelScheduledStep] = Field(default_factory=list)
+
+
+class ChannelSweepPoint(BaseModel):
+    """One point on the cycle-time-vs-channel-count curve."""
+
+    channels: int
+    cycle_time_seconds: float
+
+
+class ChannelSweepResult(BaseModel):
+    """Cycle time for channel counts 1..max, to show diminishing returns."""
+
+    points: list[ChannelSweepPoint] = Field(default_factory=list)
+
+
+class ChannelScheduleRequest(BaseModel):
+    """Request body for POST /api/optimize/channels."""
+
+    program: CommissioningProgram
+    channels: int = Field(..., ge=1, description="Number of parallel tester channels.")
+
+
+class ChannelSweepRequest(BaseModel):
+    """Request body for POST /api/optimize/channel-sweep."""
+
+    program: CommissioningProgram
+    max_channels: int = Field(8, ge=1, le=32, description="Sweep channel counts from 1 to this.")
+
+
+class RecoveryRequest(BaseModel):
+    """Request body for POST /api/recover.
+
+    Represents a runtime failure: step ``failed_step_order`` of ``program``
+    (generated for ``spec``) failed on the line, for the reason described in
+    free text by ``failure_reason`` (e.g. "communication timeout",
+    "security access denied", "flash verification failed").
+    """
+
+    spec: VehicleSpec
+    program: CommissioningProgram
+    failed_step_order: int
+    failure_reason: str
+
+
+class RecoveryResponse(BaseModel):
+    """Response body for POST /api/recover: a validated corrective sub-program."""
+
+    recovery_steps: list[CommissioningStep]
+    notes: str | None = None
+    provider: str
+    is_valid: bool
+    validation: list[ValidationIssue] = Field(default_factory=list)
+
+
 class GenerateResponse(BaseModel):
     """Response body for POST /api/generate."""
 

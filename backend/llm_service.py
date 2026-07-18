@@ -33,7 +33,7 @@ from typing import Protocol
 import httpx
 
 from .config import settings
-from .models import ValidationIssue, VehicleSpec
+from .models import CommissioningProgram, CommissioningStep, ValidationIssue, VehicleSpec
 
 
 # ---------------------------------------------------------------------------
@@ -476,3 +476,132 @@ def get_provider() -> LLMProvider:
     if settings.llm_provider == "openai" and settings.llm_api_key:
         return OpenAIProvider()
     return MockProvider()
+
+
+# ---------------------------------------------------------------------------
+# Runtime corrective actions - "step failed on the line, now what?"
+# ---------------------------------------------------------------------------
+# This is a different problem from generation/repair above: those happen
+# *before* the vehicle reaches the line (planning time). This is a runtime
+# event - a step that was executed actually failed - and the corrective
+# sub-program has to work with the world as it now is: some steps already
+# ran, some ECUs may already be unlocked, and the fix has to be a short,
+# targeted retry sequence, not a whole new program.
+RECOVERY_SYSTEM_PROMPT = """\
+You are an expert manufacturing engineer specialising in vehicle commissioning.
+A commissioning step just FAILED at runtime on the production line. Given the
+vehicle specification, the program that was running, which step failed, and
+why, produce a short corrective sub-program (1-4 steps) that resolves the
+issue and retries the failed action.
+
+Rules you MUST follow:
+- Only reference ECUs that appear in the specification's ECU list.
+- Only use a UDS service on an ECU if that ECU lists it as supported.
+- If the failure reason suggests security access was lost or denied, restore
+  it (0x27) before retrying any flash/write step on that ECU.
+- If the failure reason suggests a communication/timeout/session problem,
+  re-open a diagnostic session (0x10) before retrying.
+- The final step should retry the action that failed (same step_type/ecu,
+  reasonable uds_service).
+- Number new steps starting at the given next_order value. depends_on may
+  reference either these new steps or the given list of already-completed
+  step orders.
+
+Return ONLY valid JSON, no prose, matching exactly this schema:
+{
+  "steps": [
+    {
+      "order": <int, starting at next_order>,
+      "step_type": "diagnostic_session|security_access|flash_software|write_parameter|validation|fault_clear",
+      "ecu_id": "<must be an ECU id from the spec>",
+      "description": "<short human-readable summary>",
+      "uds_service": "<e.g. 0x2E or null>",
+      "estimated_seconds": <number>,
+      "depends_on": [<orders of prerequisite steps>]
+    }
+  ],
+  "notes": "<optional short rationale for the recovery strategy>"
+}
+"""
+
+
+def _call_recovery(
+    *, base_url: str, api_key: str, model: str, extra_headers: dict | None,
+    spec: VehicleSpec, program: CommissioningProgram, failed_step: CommissioningStep,
+    failure_reason: str,
+) -> dict:
+    """POST a recovery request and return the parsed JSON sub-program."""
+    completed_orders = [s.order for s in program.steps if s.order <= failed_step.order]
+    next_order = len(program.steps) + 1
+    user_content = (
+        "Vehicle specification (JSON):\n"
+        + spec.model_dump_json(indent=2)
+        + "\n\nProgram that was running (JSON):\n"
+        + program.model_dump_json(indent=2)
+        + f"\n\nFailed step (order {failed_step.order}):\n"
+        + failed_step.model_dump_json(indent=2)
+        + f"\n\nFailure reason: {failure_reason}"
+        + f"\n\nAlready-completed step orders you may depend on: {completed_orders}"
+        + f"\nNumber new recovery steps starting at order {next_order}."
+        + "\n\nProduce the corrective sub-program as JSON now."
+    )
+    payload = {
+        "model": model,
+        "temperature": settings.llm_temperature,
+        "messages": [
+            {"role": "system", "content": RECOVERY_SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    headers = {"Authorization": f"Bearer {api_key}"}
+    if extra_headers:
+        headers.update(extra_headers)
+
+    with httpx.Client(timeout=settings.llm_timeout) as client:
+        resp = client.post(
+            f"{base_url.rstrip('/')}/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+    content = data["choices"][0]["message"]["content"]
+    return _extract_json(content)
+
+
+def generate_recovery_program(
+    spec: VehicleSpec, program: CommissioningProgram, failed_step: CommissioningStep,
+    failure_reason: str,
+) -> tuple[dict, str]:
+    """Ask the configured real LLM provider for a corrective sub-program.
+
+    Raises if no real provider is configured (mock has no opinion on runtime
+    failures - it never fails by construction) or if the call itself fails;
+    the caller (``recovery.py``) is responsible for the same
+    generate-then-fallback pattern used everywhere else in this project.
+    Returns (raw_dict, provider_name).
+    """
+    if settings.llm_provider == "openrouter" and settings.llm_api_key:
+        raw = _call_recovery(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            extra_headers={
+                "HTTP-Referer": settings.openrouter_site_url,
+                "X-Title": settings.openrouter_site_name,
+            },
+            spec=spec, program=program, failed_step=failed_step, failure_reason=failure_reason,
+        )
+        return raw, "openrouter"
+    if settings.llm_provider == "openai" and settings.llm_api_key:
+        raw = _call_recovery(
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            extra_headers=None,
+            spec=spec, program=program, failed_step=failed_step, failure_reason=failure_reason,
+        )
+        return raw, "openai"
+    raise RuntimeError("No real LLM provider configured; use the deterministic recovery policy instead.")

@@ -1,4 +1,4 @@
-"""Train the step-duration regression model.
+"""Train the step-duration regression model, with automatic model selection.
 
 Real production telemetry (how long each commissioning step actually took on
 the line) is exactly the kind of data this PhD project would have access to
@@ -9,10 +9,21 @@ for flash_software steps only - makes duration grow with a payload-size
 proxy, mirroring how flashing time scales with software image size in
 reality.
 
-It then fits an ordinary-least-squares linear regression (closed form, via
-``numpy.linalg.lstsq`` - no extra ML dependency needed) over the same feature
-vector ``backend/duration_model.py`` uses at inference time, and writes the
-learned weights to ``data/duration_model.json``.
+This is also where the small, honest "AutoML" step lives: rather than
+committing to one feature set by hand, the script fits three candidate
+models -
+
+  1. mean_baseline          - a plain per-step-type average (no flash term).
+  2. linear                 - + a linear flash-size term.
+  3. linear_quadratic_flash - + a quadratic flash-size term.
+
+- scores each with 5-fold cross-validation (closed-form OLS per fold via
+``numpy.linalg.lstsq``, no extra ML dependency needed), and keeps whichever
+generalises best (lowest mean CV MAE). This is deliberately small in scope:
+it is automated model *selection* over a handful of interpretable candidates,
+not neural-architecture search - but it is genuinely automated, and the CV
+scores for every candidate are written to disk for transparency rather than
+just the winner's.
 
 Usage:
     python scripts/train_duration_model.py
@@ -29,7 +40,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend.duration_model import STEP_TYPES, features, MODEL_PATH  # noqa: E402
+from backend.duration_model import STEP_TYPES, build_features, MODEL_PATH  # noqa: E402
 
 # Base duration (seconds) and noise std-dev per step type - stand-in for what
 # would, in reality, be summary statistics pulled from historical run logs.
@@ -52,12 +63,25 @@ NOISE_STD = {
 # Extra seconds per unit of the flash-size proxy (only applies to flashing).
 FLASH_SIZE_SLOPE = 0.9
 
+# The AutoML candidate pool: each is a feature_spec understood by
+# backend.duration_model.build_features().
+CANDIDATES: dict[str, dict] = {
+    "mean_baseline": {
+        "onehot": True, "flash_linear": False, "flash_quadratic": False, "bias": True,
+    },
+    "linear": {
+        "onehot": True, "flash_linear": True, "flash_quadratic": False, "bias": True,
+    },
+    "linear_quadratic_flash": {
+        "onehot": True, "flash_linear": True, "flash_quadratic": True, "bias": True,
+    },
+}
 
-def generate_synthetic_log(n_per_type: int = 400, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
-    """Return (X, y): stacked feature rows and observed durations."""
+
+def generate_synthetic_log(n_per_type: int = 400, seed: int = 42) -> list[tuple[str, float, float]]:
+    """Return raw (step_type, flash_size_proxy, observed_duration) rows."""
     rng = np.random.default_rng(seed)
-    rows: list[list[float]] = []
-    targets: list[float] = []
+    rows: list[tuple[str, float, float]] = []
 
     for step_type in STEP_TYPES:
         for _ in range(n_per_type):
@@ -70,39 +94,95 @@ def generate_synthetic_log(n_per_type: int = 400, seed: int = 42) -> tuple[np.nd
                 base = base + FLASH_SIZE_SLOPE * flash_size_proxy
             noise = rng.normal(0, NOISE_STD[step_type])
             duration = max(0.2, base + noise)
+            rows.append((step_type, flash_size_proxy, duration))
 
-            rows.append(features(step_type, flash_size_proxy))
-            targets.append(duration)
+    return rows
 
-    return np.array(rows), np.array(targets)
+
+def _fit(rows: list[tuple[str, float, float]], indices, feature_spec: dict):
+    X = np.array([build_features(rows[i][0], rows[i][1], feature_spec) for i in indices])
+    y = np.array([rows[i][2] for i in indices])
+    weights, *_ = np.linalg.lstsq(X, y, rcond=None)
+    return weights, X, y
+
+
+def kfold_cv_mae(rows: list[tuple[str, float, float]], feature_spec: dict, k: int = 5, seed: int = 0) -> float:
+    """Mean absolute error, averaged over k held-out folds."""
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(len(rows))
+    folds = np.array_split(order, k)
+
+    fold_maes = []
+    for i in range(k):
+        test_idx = folds[i]
+        train_idx = np.concatenate([folds[j] for j in range(k) if j != i])
+        weights, _, _ = _fit(rows, train_idx, feature_spec)
+        X_test = np.array([build_features(rows[t][0], rows[t][1], feature_spec) for t in test_idx])
+        y_test = np.array([rows[t][2] for t in test_idx])
+        pred = X_test @ weights
+        fold_maes.append(float(np.mean(np.abs(pred - y_test))))
+    return float(np.mean(fold_maes))
 
 
 def main() -> None:
-    X, y = generate_synthetic_log()
-    weights, residuals, rank, _ = np.linalg.lstsq(X, y, rcond=None)
+    rows = generate_synthetic_log()
+    all_idx = np.arange(len(rows))
 
-    predictions = X @ weights
-    mae = float(np.mean(np.abs(predictions - y)))
+    # --- AutoML: score every candidate feature set via cross-validation. ---
+    cv_scores: dict[str, float] = {
+        name: kfold_cv_mae(rows, spec) for name, spec in CANDIDATES.items()
+    }
+    best_name = min(cv_scores, key=cv_scores.get)
+    best_spec = CANDIDATES[best_name]
+
+    print("AutoML candidate scores (5-fold CV mean absolute error, seconds):")
+    for name, score in sorted(cv_scores.items(), key=lambda kv: kv[1]):
+        marker = "  <- selected" if name == best_name else ""
+        print(f"  {name:24s} {score:6.3f}{marker}")
+
+    # --- Refit the winning candidate on the full dataset for deployment. ---
+    weights, X_full, y_full = _fit(rows, all_idx, best_spec)
+    train_mae = float(np.mean(np.abs(X_full @ weights - y_full)))
+
+    feature_order: list[str] = []
+    if best_spec.get("onehot", True):
+        feature_order.extend(STEP_TYPES)
+    if best_spec.get("flash_linear", True):
+        feature_order.append("flash_size_linear")
+    if best_spec.get("flash_quadratic", False):
+        feature_order.append("flash_size_quadratic")
+    if best_spec.get("bias", True):
+        feature_order.append("bias")
 
     MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     MODEL_PATH.write_text(
         json.dumps(
             {
+                "model_type": best_name,
+                "feature_spec": best_spec,
                 "weights": weights.tolist(),
-                "feature_order": [*STEP_TYPES, "flash_size_term", "bias"],
-                "trained_on_rows": int(X.shape[0]),
-                "train_mae_seconds": round(mae, 3),
+                "feature_order": feature_order,
+                "trained_on_rows": len(rows),
+                "train_mae_seconds": round(train_mae, 3),
+                "automl": {
+                    "candidates_evaluated": list(CANDIDATES.keys()),
+                    "cv_mae_by_candidate": {k: round(v, 3) for k, v in cv_scores.items()},
+                    "selection_method": "5-fold cross-validation, lowest mean MAE wins",
+                    "selected": best_name,
+                },
                 "note": (
                     "Trained on a synthetic historical-run-log stand-in "
                     "(scripts/train_duration_model.py); replace with real "
-                    "telemetry to retrain on actual line data."
+                    "telemetry to retrain on actual line data. Model family "
+                    "chosen automatically via cross-validation over a small "
+                    "candidate pool (see 'automl')."
                 ),
             },
             indent=2,
         ),
         encoding="utf-8",
     )
-    print(f"Trained on {X.shape[0]} synthetic rows. Train MAE: {mae:.2f}s.")
+    print(f"\nSelected model: {best_name} (train MAE: {train_mae:.2f}s on {len(rows)} rows)")
     print(f"Weights written to {MODEL_PATH}")
 
 

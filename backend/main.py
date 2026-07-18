@@ -17,16 +17,25 @@ from fastapi.staticfiles import StaticFiles
 
 from .batch import run_batch
 from .config import settings
+from .duration_model import model_info as duration_model_info
 from .generator import generate
 from .models import (
     BatchRequest,
     BatchResponse,
+    ChannelScheduleRequest,
+    ChannelScheduleResult,
+    ChannelSweepRequest,
+    ChannelSweepResult,
     CommissioningProgram,
     GenerateRequest,
     GenerateResponse,
+    RecoveryRequest,
+    RecoveryResponse,
     VehicleSpec,
 )
 from .otx_export import to_otx_xml
+from .recovery import generate_recovery
+from .scheduler import channel_sweep, schedule_with_channels
 
 # Resolve project paths relative to this file so the app works regardless of
 # the current working directory (important inside Docker and on PaaS hosts).
@@ -65,7 +74,12 @@ def health() -> dict:
         model = settings.llm_model
     else:
         provider, model = "mock", None
-    return {"status": "ok", "provider": provider, "model": model}
+    return {
+        "status": "ok",
+        "provider": provider,
+        "model": model,
+        "duration_model": duration_model_info(),
+    }
 
 
 @app.get("/api/samples")
@@ -118,6 +132,27 @@ def generate_batch(request: BatchRequest) -> BatchResponse:
         raise HTTPException(status_code=400, detail="Batch request contained no specs.")
     try:
         return run_batch(request.specs)
+    except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/optimize/channels", response_model=ChannelScheduleResult)
+def optimize_channels(request: ChannelScheduleRequest) -> ChannelScheduleResult:
+    """Schedule an already-generated program under a finite tester-channel count."""
+    return schedule_with_channels(request.program, request.channels)
+
+
+@app.post("/api/optimize/channel-sweep", response_model=ChannelSweepResult)
+def optimize_channel_sweep(request: ChannelSweepRequest) -> ChannelSweepResult:
+    """Cycle time for channel counts 1..max_channels, to plot diminishing returns."""
+    return channel_sweep(request.program, request.max_channels)
+
+
+@app.post("/api/recover", response_model=RecoveryResponse)
+def recover(request: RecoveryRequest) -> RecoveryResponse:
+    """Generate a corrective sub-program for a step that failed at runtime."""
+    try:
+        return generate_recovery(request)
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
