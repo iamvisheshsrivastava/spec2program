@@ -74,6 +74,15 @@ async function probeHealth() {
 }
 
 /* ----------------------------- Sample specs ----------------------------- */
+// True once the user has typed into the spec editor themselves. Guards
+// against a real race condition: on page load we asynchronously fetch the
+// sample list and auto-populate the editor with the first one. Those fetches
+// take a moment over the network - if the user starts typing their own spec
+// before that auto-load resolves, it must NOT silently overwrite what they
+// just wrote. Any programmatic load the user did not explicitly ask for
+// (via the dropdown) checks this flag before touching the editor.
+let userHasEditedSpec = false;
+
 async function loadSampleList() {
   try {
     const res = await fetch("/api/samples");
@@ -88,17 +97,24 @@ async function loadSampleList() {
       el.sampleSelect.appendChild(opt);
     });
 
-    // Load the first sample into the editor immediately.
-    if (samples.length) await loadSample(samples[0].file);
+    // Auto-populate the editor with the first sample - but only if the user
+    // has not already started typing their own spec in the meantime.
+    if (samples.length) await loadSample(samples[0].file, { userInitiated: false });
   } catch (err) {
     setError("Could not load sample specifications.");
   }
 }
 
-async function loadSample(filename) {
+async function loadSample(filename, { userInitiated = true } = {}) {
   const res = await fetch(`/api/samples/${encodeURIComponent(filename)}`);
   if (!res.ok) return setError("Sample not found.");
   const spec = await res.json();
+
+  // This call was the initial silent auto-load, but the user has since
+  // started editing the spec themselves - discard this load entirely rather
+  // than clobbering their work.
+  if (!userInitiated && userHasEditedSpec) return;
+
   el.specInput.value = JSON.stringify(spec, null, 2);
   clearError();
 
@@ -246,7 +262,10 @@ el.formatBtn.addEventListener("click", () => {
     el.specInput.value = JSON.stringify(parsed, null, 2);
     clearError();
   } catch (err) {
-    setError("Cannot format: invalid JSON.");
+    // Surface the browser's actual parse error (e.g. "Unexpected token G in
+    // JSON at position 1") instead of a generic message, so the user can
+    // actually find and fix the problem rather than guessing.
+    setError(`Cannot format: ${err.message}`);
   }
 });
 
@@ -255,6 +274,10 @@ el.formatBtn.addEventListener("click", () => {
 // leaving a stale, mismatched program on screen, invalidate it as soon as
 // they start typing - it comes back the instant they press Generate again.
 el.specInput.addEventListener("input", () => {
+  // Mark the spec as user-owned so the initial auto-load (if still in
+  // flight) knows not to overwrite it. See loadSampleList()/loadSample().
+  userHasEditedSpec = true;
+
   if (!el.resultState.hidden) {
     showState("empty");
     el.providerTag.hidden = true;
