@@ -21,8 +21,16 @@ the validator then checks that output against the ``VehicleSpec`` it came from.
 from __future__ import annotations
 
 from enum import Enum
+from typing import Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+# A single configuration value. Real vehicle-configuration data is not
+# uniformly stringly-typed: booleans (e.g. left_hand_drive), numbers (e.g.
+# battery capacity), and strings (e.g. drivetrain) all show up naturally.
+# Restricting this to `str` rejects perfectly valid real-world specs with a
+# confusing type error, so we accept the common JSON scalar types instead.
+ConfigValue = Union[str, bool, int, float]
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +38,10 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 class Ecu(BaseModel):
     """A single Electronic Control Unit in the vehicle (a line in the BOM)."""
+
+    # Real BOM exports carry extra columns (e.g. flash_required, coding_required
+    # flags a PLM tool adds); accept and ignore anything we don't model.
+    model_config = ConfigDict(extra="ignore")
 
     ecu_id: str = Field(..., description="Stable identifier, e.g. 'BCM'.")
     name: str = Field(..., description="Human-readable name.")
@@ -54,15 +66,21 @@ class Ecu(BaseModel):
 class VehicleSpec(BaseModel):
     """The complete, structured description of one vehicle to commission."""
 
+    # Extra fields (e.g. "plant", "vin", or any other metadata a real BOM/PLM
+    # export includes) are accepted and ignored rather than rejected. This
+    # schema only enforces the fields the pipeline actually depends on.
+    model_config = ConfigDict(extra="ignore")
+
     vehicle_id: str = Field(..., description="Order / VIN-like identifier.")
     model: str = Field(..., description="Vehicle model, e.g. 'ID.4'.")
     model_year: int = Field(..., description="Model year.")
 
     # Vehicle configuration: the option codes / features that determine which
-    # ECUs are present and how they must be parameterised.
-    configuration: dict[str, str] = Field(
+    # ECUs are present and how they must be parameterised. Values may be
+    # strings, booleans, or numbers - see ConfigValue above.
+    configuration: dict[str, ConfigValue] = Field(
         default_factory=dict,
-        description="Option/feature codes, e.g. {'drivetrain':'BEV'}.",
+        description="Option/feature codes, e.g. {'drivetrain':'BEV','left_hand_drive':true}.",
     )
 
     # Bill of materials expressed as the list of ECUs to be commissioned.

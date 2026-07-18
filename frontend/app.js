@@ -133,6 +133,35 @@ function clearError() {
   el.inlineError.textContent = "";
 }
 
+/**
+ * Turn a FastAPI error response body into a readable message.
+ *
+ * FastAPI's `detail` field is NOT always a string:
+ *   - App-raised HTTPException(detail="...")   -> detail is a string
+ *   - Pydantic request-validation failures      -> detail is an ARRAY of
+ *     {loc, msg, type} objects (one per invalid field), auto-generated
+ *     before our code even runs (e.g. a required field like vehicle_id
+ *     is missing from the spec, or a field has the wrong type).
+ * Blindly doing `new Error(detail)` on the array case stringifies it to
+ * something like "[object Object],[object Object]" - unreadable. This
+ * formats each validation error as "field.path: message" instead.
+ */
+function formatApiError(payload, status) {
+  const detail = payload && payload.detail;
+  if (typeof detail === "string" && detail) return detail;
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((e) => {
+        const path = Array.isArray(e.loc)
+          ? e.loc.filter((p) => p !== "body" && p !== "spec").join(".")
+          : "";
+        return path ? `${path}: ${e.msg}` : e.msg;
+      })
+      .join("; ");
+  }
+  return `Request failed (HTTP ${status}).`;
+}
+
 /* ------------------------------ Generate -------------------------------- */
 async function generate() {
   clearError();
@@ -142,7 +171,7 @@ async function generate() {
   try {
     spec = JSON.parse(el.specInput.value);
   } catch (err) {
-    return setError("Spec is not valid JSON.");
+    return setError(`Spec is not valid JSON: ${err.message}`);
   }
 
   el.generateBtn.disabled = true;
@@ -156,8 +185,8 @@ async function generate() {
     });
 
     if (!res.ok) {
-      const detail = await res.json().catch(() => ({}));
-      throw new Error(detail.detail || `Request failed (${res.status}).`);
+      const payload = await res.json().catch(() => null);
+      throw new Error(formatApiError(payload, res.status));
     }
 
     const data = await res.json();
