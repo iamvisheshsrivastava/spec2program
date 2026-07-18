@@ -21,6 +21,10 @@ rule-based planner, or against any OpenAI-compatible LLM.
 ![python](https://img.shields.io/badge/python-3.11-black)
 ![license](https://img.shields.io/badge/license-MIT-black)
 
+**Live demo: [spec2program.onrender.com](https://spec2program.onrender.com)**
+(free tier — the instance sleeps after inactivity, so the first request can
+take up to ~30s to wake it up.)
+
 ---
 
 ## Why this project exists
