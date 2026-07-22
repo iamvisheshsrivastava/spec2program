@@ -14,9 +14,9 @@ any other code. Two providers ship with the project:
   model to return strict JSON matching the ``CommissioningProgram`` schema.
 
 * ``OpenRouterProvider`` - calls OpenRouter.ai, a router that exposes many
-  underlying model providers (Anthropic, OpenAI, Google, ...) behind one
-  OpenAI-compatible API. Defaults to a strong, current model
-  (``anthropic/claude-sonnet-5``) for high-quality structured output.
+    underlying model providers (Anthropic, OpenAI, Google, DeepSeek, ...) behind
+      one OpenAI-compatible API. Defaults to a fast, cost-efficient model
+        (``deepseek/deepseek-v4-flash``) for structured output.
 
 Both real providers return a raw ``dict`` (parsed JSON). Turning that dict
 into a validated ``CommissioningProgram`` happens in ``generator.py``, which
