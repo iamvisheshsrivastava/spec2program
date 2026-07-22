@@ -334,7 +334,7 @@ so any container host works. Free option used for the live demo:
 2. On [render.com](https://render.com), New → Web Service → connect the repo →
    Render detects the `Dockerfile` automatically.
 3. Set environment variables: `LLM_PROVIDER=openrouter`, `LLM_API_KEY=...`,
-   `LLM_MODEL=anthropic/claude-sonnet-5`.
+      `LLM_MODEL=deepseek/deepseek-v4-flash`.
 4. Deploy. Free instances sleep after inactivity (first request after a while
    takes ~30s to wake up); everything after that is instant.
 
