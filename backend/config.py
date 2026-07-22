@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # These are only required when llm_provider is "openai" or "openrouter".
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "deepseek/deepseek-v4-flash" 
     llm_temperature: float = 0.1
     llm_timeout: int = 60
 
