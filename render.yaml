@@ -18,7 +18,7 @@ services:
       - key: LLM_API_KEY
         sync: false
       - key: LLM_MODEL
-        value: anthropic/claude-sonnet-5
+        value: deepseek/deepseek-v4-flash
       - key: LLM_TEMPERATURE
         value: "0.1"
       - key: CORS_ORIGINS
