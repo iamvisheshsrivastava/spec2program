@@ -143,8 +143,10 @@ docker compose up --build
 Copy `.env.example` to `.env` and set:
 
 ```env
-LLM_PROVIDER=openai
-LLM_API_KEY=sk-...                       # your key
+LLM_PROVIDER=openrouter
+LLM_API_KEY=sk-...                       # your ke
+LLM_BASE_URL=https://openrouter.ai/api/v
+LLM_MODEL=deepseek/deepseek-v4-flash
 LLM_BASE_URL=https://api.openai.com/v1   # or Together AI, Groq, Azure, Ollama…
 LLM_MODEL=gpt-4o-mini
 ```
