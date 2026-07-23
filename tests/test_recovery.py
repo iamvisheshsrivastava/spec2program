@@ -98,3 +98,37 @@ def test_recovery_step_numbering_continues_after_program(simple_spec):
     )
     response = generate_recovery(request)
     assert all(s.order > len(program.steps) for s in response.recovery_steps)
+
+
+def test_recovery_step_numbering_does_not_collide_with_gapped_orders(simple_spec):
+    """Regression test: order used to be based on len(steps), which collides
+    with an existing step's order whenever the program has gaps (e.g. after a
+    prior partial recovery round leaves orders 1, 2, 4 instead of 1, 2, 3).
+    """
+    from backend.models import CommissioningProgram, CommissioningStep, StepType
+
+    program = CommissioningProgram(
+        vehicle_id=simple_spec.vehicle_id,
+        steps=[
+            CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                               ecu_id="BMS", description="Open session", uds_service="0x10",
+                               estimated_seconds=3.0, depends_on=[]),
+            CommissioningStep(order=2, step_type=StepType.SECURITY_ACCESS,
+                               ecu_id="BMS", description="Unlock", uds_service="0x27",
+                               estimated_seconds=4.0, depends_on=[1]),
+            # Gap: order 3 is missing (e.g. removed by an earlier edit).
+            CommissioningStep(order=4, step_type=StepType.FLASH_SOFTWARE,
+                               ecu_id="BMS", description="Flash H12->H15", uds_service="0x34",
+                               estimated_seconds=32.0, depends_on=[2]),
+        ],
+    )
+    request = RecoveryRequest(
+        spec=simple_spec, program=program, failed_step_order=4,
+        failure_reason="timeout",
+    )
+    response = generate_recovery(request)
+
+    existing_orders = {s.order for s in program.steps}
+    new_orders = [s.order for s in response.recovery_steps]
+    assert not existing_orders.intersection(new_orders)
+    assert len(new_orders) == len(set(new_orders))

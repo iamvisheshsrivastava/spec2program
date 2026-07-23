@@ -117,9 +117,12 @@ def schedule_with_channels(program: CommissioningProgram, channels: int) -> Chan
     RCPS tooling, and it is deterministic and cheap to compute for every
     channel count in the sweep below.
     """
+    if channels < 1:
+        raise ValueError(f"channels must be >= 1, got {channels}.")
+
     steps = sorted(program.steps, key=lambda s: s.order)
-    if not steps or channels < 1:
-        return ChannelScheduleResult(channels=max(channels, 1), cycle_time_seconds=0.0, schedule=[])
+    if not steps:
+        return ChannelScheduleResult(channels=channels, cycle_time_seconds=0.0, schedule=[])
 
     finished_end: dict[int, float] = {}
     channel_free_at = [0.0] * channels

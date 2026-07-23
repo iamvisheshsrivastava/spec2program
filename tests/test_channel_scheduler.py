@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from backend.models import CommissioningProgram, CommissioningStep, StepType
 from backend.scheduler import channel_sweep, schedule_with_channels
 
@@ -80,3 +82,14 @@ def test_empty_program_channel_schedule():
     result = schedule_with_channels(program, channels=3)
     assert result.cycle_time_seconds == 0.0
     assert result.schedule == []
+
+
+def test_zero_or_negative_channels_raises():
+    program = _program([
+        CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="a", estimated_seconds=10, depends_on=[]),
+    ])
+    with pytest.raises(ValueError):
+        schedule_with_channels(program, channels=0)
+    with pytest.raises(ValueError):
+        schedule_with_channels(program, channels=-5)

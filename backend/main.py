@@ -139,7 +139,10 @@ def generate_batch(request: BatchRequest) -> BatchResponse:
 @app.post("/api/optimize/channels", response_model=ChannelScheduleResult)
 def optimize_channels(request: ChannelScheduleRequest) -> ChannelScheduleResult:
     """Schedule an already-generated program under a finite tester-channel count."""
-    return schedule_with_channels(request.program, request.channels)
+    try:
+        return schedule_with_channels(request.program, request.channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/optimize/channel-sweep", response_model=ChannelSweepResult)
@@ -160,7 +163,13 @@ def recover(request: RecoveryRequest) -> RecoveryResponse:
 @app.post("/api/export/otx")
 def export_otx(program: CommissioningProgram) -> Response:
     """Export a generated program as an OTX-style XML procedure document."""
-    xml = to_otx_xml(program)
+    try:
+        xml = to_otx_xml(program)
+    except Exception as exc:  # noqa: BLE001 - surface export failures as a clean 400
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not export program to OTX: {exc}",
+        ) from exc
     return Response(
         content=xml,
         media_type="application/xml",
