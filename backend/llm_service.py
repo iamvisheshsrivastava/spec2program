@@ -27,6 +27,7 @@ so the product never hard-fails in front of a reviewer.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Protocol
 
@@ -34,6 +35,8 @@ import httpx
 
 from .config import settings
 from .models import CommissioningProgram, CommissioningStep, ValidationIssue, VehicleSpec
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -277,14 +280,38 @@ def _extract_json(content: str) -> dict:
     # Strip a markdown code fence if present.
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", content, re.DOTALL)
     if fenced:
+        logger.debug("Model response was not raw JSON; recovered it from a markdown code fence.")
         return json.loads(fenced.group(1))
 
     # Fall back to the first '{' .. last '}' span in the text.
     start, end = content.find("{"), content.rfind("}")
     if start != -1 and end != -1 and end > start:
+        logger.debug("Model response was not raw JSON; recovered it from a {...} span in the text.")
         return json.loads(content[start : end + 1])
 
+    logger.warning("Model response contained no JSON object.")
     raise json.JSONDecodeError("No JSON object found in model output.", content, 0)
+
+
+def _extract_content(data: dict) -> str:
+    """Pull the assistant message text out of a Chat Completions response.
+
+    Real endpoints occasionally return an unexpected shape (an API error
+    body, an empty ``choices`` list, a moderation refusal with no
+    ``content`` key, etc.). Validating the structure here and raising a
+    clear, descriptive error lets callers fall back gracefully instead of
+    crashing with a bare IndexError/KeyError deep in the call stack.
+    """
+    choices = data.get("choices")
+    if not choices:
+        raise ValueError(f"LLM response contained no 'choices': {data!r}")
+    message = choices[0].get("message")
+    if not message or "content" not in message:
+        raise ValueError(f"LLM response choice had no message content: {choices[0]!r}")
+    content = message["content"]
+    if not content:
+        raise ValueError("LLM response message content was empty.")
+    return content
 
 
 def _call_chat_completions(
@@ -318,6 +345,7 @@ def _call_chat_completions(
     if extra_headers:
         headers.update(extra_headers)
 
+    logger.info("Calling LLM provider for program generation (model=%s, base_url=%s).", model, base_url)
     # Synchronous call - simple and robust. FastAPI runs this in a
     # threadpool because the route handler is declared `def`, not `async`.
     with httpx.Client(timeout=settings.llm_timeout) as client:
@@ -329,7 +357,8 @@ def _call_chat_completions(
         resp.raise_for_status()
         data = resp.json()
 
-    content = data["choices"][0]["message"]["content"]
+    content = _extract_content(data)
+    logger.debug("LLM generation call succeeded (model=%s).", model)
     return _extract_json(content)
 
 
@@ -374,6 +403,7 @@ def _call_repair(
     if extra_headers:
         headers.update(extra_headers)
 
+    logger.info("Calling LLM provider for self-repair (model=%s, base_url=%s).", model, base_url)
     with httpx.Client(timeout=settings.llm_timeout) as client:
         resp = client.post(
             f"{base_url.rstrip('/')}/chat/completions",
@@ -383,7 +413,8 @@ def _call_repair(
         resp.raise_for_status()
         data = resp.json()
 
-    content = data["choices"][0]["message"]["content"]
+    content = _extract_content(data)
+    logger.debug("LLM repair call succeeded (model=%s).", model)
     return _extract_json(content)
 
 
@@ -532,7 +563,10 @@ def _call_recovery(
 ) -> dict:
     """POST a recovery request and return the parsed JSON sub-program."""
     completed_orders = [s.order for s in program.steps if s.order <= failed_step.order]
-    next_order = len(program.steps) + 1
+    # Base the next order on the highest existing order, not the step count,
+    # so it can't collide with an existing step's order when the program has
+    # gaps (see the same fix in recovery.py's _mock_recovery).
+    next_order = max((s.order for s in program.steps), default=0) + 1
     user_content = (
         "Vehicle specification (JSON):\n"
         + spec.model_dump_json(indent=2)
@@ -558,6 +592,10 @@ def _call_recovery(
     if extra_headers:
         headers.update(extra_headers)
 
+    logger.info(
+        "Calling LLM provider for recovery of failed step %d (model=%s, base_url=%s).",
+        failed_step.order, model, base_url,
+    )
     with httpx.Client(timeout=settings.llm_timeout) as client:
         resp = client.post(
             f"{base_url.rstrip('/')}/chat/completions",
@@ -567,7 +605,8 @@ def _call_recovery(
         resp.raise_for_status()
         data = resp.json()
 
-    content = data["choices"][0]["message"]["content"]
+    content = _extract_content(data)
+    logger.debug("LLM recovery call succeeded (model=%s).", model)
     return _extract_json(content)
 
 

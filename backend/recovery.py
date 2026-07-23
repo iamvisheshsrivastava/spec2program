@@ -62,7 +62,10 @@ def _mock_recovery(
     supports = set(ecu.supported_uds_services)
     reason = failure_reason.lower()
     steps: list[CommissioningStep] = []
-    order = len(program.steps)
+    # Use the highest existing order, not the step count, so recovery steps
+    # never collide with an existing order when the program has gaps (e.g.
+    # orders 1, 3, 5 after earlier edits or partial recovery rounds).
+    order = max((s.order for s in program.steps), default=0)
     prereq: list[int] = []
 
     def add(step_type: StepType, description: str, uds: str | None, seconds: float) -> None:
