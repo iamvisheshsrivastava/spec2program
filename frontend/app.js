@@ -75,7 +75,88 @@ function showState(name) {
   el.emptyState.hidden = name !== "empty";
   el.loadingState.hidden = name !== "loading";
   el.resultState.hidden = name !== "result";
+  if (name !== "loading") stopProgress();
 }
+
+/* ------------------------------ Progress -------------------------------- */
+// Generation is a single, slow LLM call - typically ~20s, occasionally much
+// longer, and slower still if the free-tier host has gone to sleep and has
+// to wake up first. With no feedback that reads as "the page is broken", so
+// we show elapsed time plus a phase label.
+//
+// The bar is deliberately honest: it advances against a *typical* duration,
+// and once it passes that it switches to an indeterminate pulse instead of
+// creeping toward 100% and stalling there. A progress bar that lies about
+// how far along it is, is worse than one that admits it doesn't know.
+let progressTimer = null;
+let progressStart = 0;
+
+const PROGRESS_PHASES = [
+  { at: 0,  text: "Sending specification to the model…" },
+  { at: 3,  text: "Model is generating the program…" },
+  { at: 12, text: "Still generating - reasoning about UDS ordering…" },
+  { at: 25, text: "Taking longer than usual. Validating once it returns…" },
+  { at: 45, text: "Still working. A self-repair round may have been triggered…" },
+  { at: 75, text: "Unusually slow - the host may be waking from sleep…" },
+];
+
+function startProgress({ typicalSeconds = 20, firstCall = false } = {}) {
+  stopProgress();
+  progressStart = performance.now();
+
+  const track = document.getElementById("progressTrack");
+  const fill = document.getElementById("progressFill");
+  const phase = document.getElementById("progressPhase");
+  const elapsedEl = document.getElementById("progressElapsed");
+  const hintEl = document.getElementById("progressHint");
+  if (!track || !fill) return;
+
+  track.classList.remove("indeterminate");
+  fill.style.width = "0%";
+  if (hintEl) {
+    hintEl.textContent = firstCall
+      ? "first request may take ~30s extra to wake the server"
+      : `typically ~${typicalSeconds}s`;
+  }
+
+  const tick = () => {
+    const secs = (performance.now() - progressStart) / 1000;
+    if (elapsedEl) elapsedEl.textContent = `${secs.toFixed(1)}s`;
+
+    // Advance to at most 90% over the typical duration, then hand over to
+    // the indeterminate animation rather than faking further progress.
+    if (secs < typicalSeconds) {
+      fill.style.width = `${Math.min(90, (secs / typicalSeconds) * 90)}%`;
+    } else if (!track.classList.contains("indeterminate")) {
+      track.classList.add("indeterminate");
+    }
+
+    if (phase) {
+      let text = PROGRESS_PHASES[0].text;
+      for (const p of PROGRESS_PHASES) if (secs >= p.at) text = p.text;
+      if (phase.textContent !== text) phase.textContent = text;
+    }
+    const meta = elapsedEl && elapsedEl.parentElement;
+    if (meta) meta.classList.toggle("slow", secs > 45);
+  };
+
+  tick();
+  progressTimer = setInterval(tick, 100);
+}
+
+function stopProgress() {
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+  const track = document.getElementById("progressTrack");
+  const fill = document.getElementById("progressFill");
+  if (track) track.classList.remove("indeterminate");
+  if (fill) fill.style.width = "100%";
+}
+
+/** Whether any request has completed yet this page-load (cold-start hint). */
+let hasCompletedARequest = false;
 
 /* --------------------------- Health / status ---------------------------- */
 async function probeHealth() {
@@ -200,6 +281,7 @@ async function generate() {
 
   el.generateBtn.disabled = true;
   showState("loading");
+  startProgress({ typicalSeconds: 20, firstCall: !hasCompletedARequest });
 
   try {
     const res = await fetch("/api/generate", {
@@ -214,6 +296,7 @@ async function generate() {
     }
 
     const data = await res.json();
+    hasCompletedARequest = true;
     lastSpec = spec;
     renderResult(data);
     showState("result");
@@ -221,6 +304,7 @@ async function generate() {
     setError(err.message);
     showState("empty");
   } finally {
+    stopProgress();
     el.generateBtn.disabled = false;
   }
 }
@@ -453,7 +537,28 @@ el.exportOtxBtn.addEventListener("click", async () => {
 el.batchBtn.addEventListener("click", async () => {
   el.batchBtn.disabled = true;
   el.batchResult.hidden = false;
-  el.batchResult.innerHTML = `<p class="hint">Running batch…</p>`;
+
+  // The batch runs its specs concurrently server-side, so it finishes in
+  // roughly the time of a single generation rather than N times longer -
+  // but that is still tens of seconds, so show a live elapsed counter here
+  // too rather than a static "Running…".
+  const started = performance.now();
+  const render = (note) => {
+    const secs = ((performance.now() - started) / 1000).toFixed(1);
+    el.batchResult.innerHTML =
+      `<p class="hint">Running batch across all sample vehicles… ` +
+      `<strong>${secs}s</strong><br><span class="progress-meta">${esc(note)}</span></p>`;
+  };
+  render("specs run concurrently, so this takes about as long as one vehicle");
+  const ticker = setInterval(() => {
+    const secs = (performance.now() - started) / 1000;
+    render(
+      secs > 60
+        ? "unusually slow - the host may be waking from sleep"
+        : "specs run concurrently, so this takes about as long as one vehicle"
+    );
+  }, 200);
+
   try {
     const sampleList = await (await fetch("/api/samples")).json();
     const specs = await Promise.all(
@@ -471,15 +576,19 @@ el.batchBtn.addEventListener("click", async () => {
       throw new Error(formatApiError(payload, res.status));
     }
     const data = await res.json();
-    renderBatch(data);
+    clearInterval(ticker);
+    hasCompletedARequest = true;
+    renderBatch(data, (performance.now() - started) / 1000);
   } catch (err) {
+    clearInterval(ticker);
     el.batchResult.innerHTML = `<p class="hint">Batch failed: ${esc(err.message)}</p>`;
   } finally {
+    clearInterval(ticker);
     el.batchBtn.disabled = false;
   }
 });
 
-function renderBatch(data) {
+function renderBatch(data, wallSeconds) {
   const a = data.aggregate;
   el.batchResult.innerHTML = `
     <div class="metrics">
@@ -489,6 +598,12 @@ function renderBatch(data) {
       ${metric(formatTime(a.avg_critical_path_seconds), "Avg critical-path time")}
       ${metric(`${a.avg_speedup_factor}×`, "Avg speedup")}
     </div>
+    ${
+      wallSeconds
+        ? `<p class="hint">Generated ${a.vehicles} vehicles in ${wallSeconds.toFixed(1)}s wall-clock ` +
+          `(the pipeline runs them concurrently).</p>`
+        : ""
+    }
     ${
       a.bottleneck_ecus.length
         ? `<p class="hint">Recurring bottleneck ECUs: ${a.bottleneck_ecus.map(esc).join(", ")}</p>`

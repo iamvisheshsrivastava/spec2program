@@ -101,8 +101,15 @@
       </div>
 
       <div id="loadingState" class="loading-state" hidden>
-        <div class="bar"></div>
-        <p>Generating and validating…</p>
+        <div class="bar" id="progressTrack">
+          <div class="bar-fill" id="progressFill"></div>
+        </div>
+        <p class="progress-phase" id="progressPhase">Generating and validating…</p>
+        <p class="progress-meta">
+          <span id="progressElapsed">0.0s</span>
+          <span class="progress-sep">·</span>
+          <span id="progressHint">typically ~20s</span>
+        </p>
       </div>
 
       <div id="resultState" hidden>

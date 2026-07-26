@@ -14,9 +14,9 @@ any other code. Two providers ship with the project:
   model to return strict JSON matching the ``CommissioningProgram`` schema.
 
 * ``OpenRouterProvider`` - calls OpenRouter.ai, a router that exposes many
-    underlying model providers (Anthropic, OpenAI, Google, DeepSeek, ...) behind
-      one OpenAI-compatible API. Defaults to a fast, cost-efficient model
-        (``deepseek/deepseek-v4-flash``) for structured output.
+  underlying model providers (Anthropic, OpenAI, Google, Meta, DeepSeek, ...)
+  behind one OpenAI-compatible API. The default model was picked by a measured
+  bake-off rather than reputation - see "Choosing the model" in the README.
 
 Both real providers return a raw ``dict`` (parsed JSON). Turning that dict
 into a validated ``CommissioningProgram`` happens in ``generator.py``, which
@@ -131,6 +131,8 @@ Rules you MUST follow:
   2. ONE final validation step. Prefer an ECU supporting 0x31 and use
      "0x31"; otherwise an ECU supporting 0x22 and use "0x22"; if neither
      exists, set uds_service to null.
+- EVERY ECU in the specification must appear in at least one step. Even an
+  ECU that needs no software update must at least be opened and validated.
 - Keep "notes" to at most one short sentence.
 
 Return ONLY valid JSON, no prose, matching exactly this schema:

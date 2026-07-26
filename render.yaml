@@ -17,8 +17,11 @@ services:
         value: openrouter
       - key: LLM_API_KEY
         sync: false
+      # Selected by measurement (see README "Choosing the model"): fastest
+      # model that was rule-valid on every run, and cheaper per generation
+      # than the reasoning models tried.
       - key: LLM_MODEL
-        value: deepseek/deepseek-v4-flash
+        value: meta-llama/llama-3.3-70b-instruct
       - key: LLM_TEMPERATURE
         value: "0.1"
       # LLM_MAX_TOKENS is deliberately NOT set. Reasoning models (the default

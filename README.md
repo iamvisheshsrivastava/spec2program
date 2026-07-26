@@ -142,18 +142,28 @@ docker compose up --build
 
 Copy `.env.example` to `.env` and set:
 
+**Option A — OpenRouter** (one key, many model providers):
+
 ```env
 LLM_PROVIDER=openrouter
-LLM_API_KEY=sk-...                       # your ke
-LLM_BASE_URL=https://openrouter.ai/api/v
-LLM_MODEL=deepseek/deepseek-v4-flash
-LLM_BASE_URL=https://api.openai.com/v1   # or Together AI, Groq, Azure, Ollama…
+LLM_API_KEY=sk-or-...                     # your OpenRouter key
+LLM_MODEL=meta-llama/llama-3.3-70b-instruct
+```
+
+**Option B — any OpenAI-compatible endpoint** (OpenAI, Groq, Together AI,
+Azure gateways, Ollama, …):
+
+```env
+LLM_PROVIDER=openai
+LLM_API_KEY=sk-...
+LLM_BASE_URL=https://api.openai.com/v1    # or e.g. https://api.groq.com/openai/v1
 LLM_MODEL=gpt-4o-mini
 ```
 
-The API is OpenAI-compatible, so the same setting works with many providers.
-If `openai` is selected but no key is present, the app safely falls back to
-mock mode instead of crashing.
+Both paths use the same Chat Completions contract, so switching provider or
+model is configuration only — never a code change. If a real provider is
+selected but no key is present, the app falls back to the offline mock planner
+rather than crashing.
 
 ---
 
@@ -326,9 +336,9 @@ protocol-agnostic at the `diag-comm-action` level for exactly this reason.
 
 ## Performance
 
-The pipeline's cost is dominated by the LLM round-trip, so the optimisation
-work targets everything *around* that call rather than the model itself
-(`deepseek/deepseek-v4-flash` is deliberately kept — it's cheap and fast).
+End-to-end cost is dominated by the LLM round-trip, so the work here splits in
+two: making everything *around* that call cheap (below), and then choosing the
+call itself on evidence ([Choosing the model](#choosing-the-model)).
 
 | Hot path | Before | After | |
 |---|---:|---:|---:|
@@ -370,18 +380,75 @@ Scheduler output is unchanged — verified byte-identical against the previous
 implementation across 9,200 comparisons on 400 randomly generated programs.
 
 **A caution learned the hard way:** do not set `LLM_MAX_TOKENS` casually.
-Reasoning models — including the default `deepseek/deepseek-v4-flash` — bill
-hidden reasoning tokens against that same budget. A cap of 4096 looks generous
-beside the ~1.2k tokens of visible JSON, but one measured run needed **8751**
-completion tokens; capped, two of three requests came back truncated
-(`finish_reason='length'`), failed to parse, and silently fell back to the mock
-planner, wasting the whole call. The cap is now unset by default, and a
-truncated reply raises an explicit error instead of a misleading JSON parse
-failure.
+Reasoning models bill hidden reasoning tokens against that same budget. A cap
+of 4096 looks generous beside the ~1.2k tokens of visible JSON, but one
+measured run needed **8751** completion tokens; capped, two of three requests
+came back truncated (`finish_reason='length'`), failed to parse, and silently
+fell back to the mock planner, wasting the whole call. The cap is unset by
+default, and a truncated reply now raises an explicit error instead of a
+misleading JSON parse failure.
 
-Note also that end-to-end latency is dominated by the provider and varies a
-lot — repeated single generations of the same spec measured 15s, 37s, 58s and
-90s. Treat any single timing here as indicative, not precise.
+---
+
+## Choosing the model
+
+The obvious lever — "pick a fast model" — is easy to get wrong, because on
+this task the two things that matter (latency and rule-correctness) trade off
+against each other, and the usual proxies for quality don't predict either.
+
+Each candidate generated a program for both sample specs, twice, through the
+production pipeline. Scoring is what the project already cares about: does the
+program pass `validator.py`, and does it touch every ECU.
+
+| Model | Clean runs | Mean latency | Cost / 1000 generations |
+|---|:---:|---:|---:|
+| **meta-llama/llama-3.3-70b-instruct** | **4/4** | **18.2 s** | **$0.55** |
+| mistralai/mistral-small-24b-instruct | 4/4 | 34.1 s | $0.19 |
+| deepseek/deepseek-v4-flash | 4/4 | 46.7 s | $1.48 |
+| microsoft/phi-4 | 2/4 | 16.0 s | — |
+
+Three findings worth recording, because each contradicts an intuition:
+
+1. **The "cheap" model was the most expensive.** `deepseek-v4-flash` has a low
+   per-token price, but it is a *reasoning* model: it emitted **4400** completion
+   tokens per request, of which ~3300 were hidden reasoning never shown to the
+   user, against ~790 for Llama 3.3. Paying less per token for 5.6× more tokens
+   is a worse deal — 2.7× worse here. Per-token price is the wrong unit; cost
+   per *task* is the right one.
+
+2. **The fastest model was unusable.** `phi-4` was quickest at 16.0 s but
+   failed on half its runs, always the same way: emitting security access
+   (`0x27`) on an ECU whose spec doesn't list it — precisely the class of
+   error `validator.py` exists to catch. And an invalid program is not merely
+   wrong, it is *slow*, because it triggers the self-repair loop and costs a
+   second round-trip. Correctness and latency are not independent axes.
+
+3. **Reasoning effort is not a dial you can turn.** `reasoning_effort: low`
+   and `minimal` were both accepted by the API and both ignored by the model —
+   reasoning tokens went *up* (4285 → 4735 → 6015). The only reliable way to
+   stop paying for reasoning was to choose a non-reasoning model.
+
+A fourth, subtler finding drove a code change. Three of the four candidates
+produced programs that were **fully valid yet skipped an ECU entirely**,
+leaving it unopened and unvalidated. Nothing flagged this, because every other
+check in `validator.py` is per-step and an absent ECU has no step to inspect.
+That gap is now closed: an untouched ECU raises a warning, and the system
+prompt states the requirement explicitly. With that rule in place, every
+model reached full coverage.
+
+**Read the latency column with caution.** Provider-side latency is extremely
+noisy: repeated generations of the *same* spec with the *same* model measured
+14 s, 30 s, 34 s, 79 s, 118 s and 229 s, plus a 340 s outlier on another model.
+Concurrent requests on one API key inflate this further. The clean-run column
+is the stable, decision-relevant signal; the latency column is a rough
+ordering, not a benchmark. Anyone reproducing this should expect different
+absolute numbers and should run more than two samples per cell — the sample
+size here (2 runs × 2 specs per model) is enough to disqualify a model that
+fails repeatedly and for an identifiable reason, but not enough to finely rank
+the models that pass.
+
+Reproduce or extend with `scripts/eval_harness.py`. Switching model is one
+environment variable (`LLM_MODEL`) with no code change.
 
 ---
 
@@ -395,7 +462,7 @@ so any container host works. Free option used for the live demo:
 2. On [render.com](https://render.com), New → Web Service → connect the repo →
    Render detects the `Dockerfile` automatically.
 3. Set environment variables: `LLM_PROVIDER=openrouter`, `LLM_API_KEY=...`,
-      `LLM_MODEL=deepseek/deepseek-v4-flash`.
+      `LLM_MODEL=meta-llama/llama-3.3-70b-instruct`.
 4. Deploy. Free instances sleep after inactivity (first request after a while
    takes ~30s to wake up); everything after that is instant.
 

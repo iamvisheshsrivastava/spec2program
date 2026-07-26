@@ -93,3 +93,48 @@ def test_vehicle_id_mismatch_is_flagged(simple_spec):
     issues = validate_program(simple_spec, program)
     assert not is_valid(issues)
     assert any("does not match" in i.message for i in issues)
+
+
+def test_untouched_ecu_is_warned_about(simple_spec):
+    """An ECU the program never touches must produce a warning.
+
+    Regression test for a real gap: a generator can emit a program that
+    breaks no rule at all yet silently skips an ECU entirely, leaving it
+    uncommissioned. Every other check here is per-step, so without this an
+    absent ECU is invisible - three of four candidate models in the model
+    bake-off did exactly this and still scored as fully valid.
+    """
+    program = CommissioningProgram(
+        vehicle_id="TEST-0001",
+        steps=[
+            # Touches BMS only; the spec also contains GATEWAY.
+            CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                              ecu_id="BMS", description="open",
+                              uds_service="0x10", estimated_seconds=3),
+        ],
+    )
+    issues = validate_program(simple_spec, program)
+
+    # It is a warning, not an error: the program is still runnable.
+    assert is_valid(issues)
+    assert any(
+        "GATEWAY" in i.message and "never appears" in i.message and i.severity == "warning"
+        for i in issues
+    )
+
+
+def test_full_coverage_produces_no_untouched_warning(simple_spec):
+    """A program touching every ECU must not raise the coverage warning."""
+    program = CommissioningProgram(
+        vehicle_id="TEST-0001",
+        steps=[
+            CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                              ecu_id="BMS", description="open",
+                              uds_service="0x10", estimated_seconds=3),
+            CommissioningStep(order=2, step_type=StepType.DIAGNOSTIC_SESSION,
+                              ecu_id="GATEWAY", description="open",
+                              uds_service="0x10", estimated_seconds=3),
+        ],
+    )
+    issues = validate_program(simple_spec, program)
+    assert not any("never appears" in i.message for i in issues)

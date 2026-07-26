@@ -107,6 +107,20 @@ def validate_program(
         seen_orders.add(step.order)
 
     # ---- Coverage checks ----------------------------------------------------
+    # Every ECU in the vehicle should be touched by at least one step. A
+    # generator can produce a program that breaks no rule yet silently omits
+    # an ECU entirely - commissioning it partially and leaving one control
+    # unit unopened and unvalidated. That is a real defect, but every other
+    # check here is per-step, so an absent ECU would otherwise be invisible.
+    touched = {s.ecu_id for s in program.steps}
+    for ecu in spec.ecus:
+        if ecu.ecu_id not in touched:
+            issues.append(ValidationIssue(
+                severity="warning",
+                message=(f"ECU '{ecu.ecu_id}' ({ecu.name}) never appears in the "
+                         f"program; it is left uncommissioned."),
+            ))
+
     # Every ECU that needs a software update should actually be flashed.
     flashed = {s.ecu_id for s in program.steps if s.step_type == StepType.FLASH_SOFTWARE}
     for ecu in spec.ecus:

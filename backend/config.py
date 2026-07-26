@@ -24,7 +24,12 @@ class Settings(BaseSettings):
     # These are only required when llm_provider is "openai" or "openrouter".
     llm_api_key: str = ""
     llm_base_url: str = "https://api.openai.com/v1"
-    llm_model: str = "deepseek/deepseek-v4-flash" 
+    # Chosen by measurement, not reputation - see the model bake-off in the
+    # README. Against the two sample specs this was the fastest model that
+    # produced a rule-valid program on every run, and it is also cheaper per
+    # generation than the reasoning models tried, because it emits ~790
+    # completion tokens instead of ~4400.
+    llm_model: str = "meta-llama/llama-3.3-70b-instruct"
     llm_temperature: float = 0.1
     llm_timeout: int = 60
 
