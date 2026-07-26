@@ -324,6 +324,46 @@ protocol-agnostic at the `diag-comm-action` level for exactly this reason.
 
 ---
 
+## Performance
+
+The pipeline's cost is dominated by the LLM round-trip, so the optimisation
+work targets everything *around* that call rather than the model itself
+(`deepseek/deepseek-v4-flash` is deliberately kept — it's cheap and fast).
+
+| Hot path | Before | After | |
+|---|---:|---:|---:|
+| Duration-model prediction (300 steps) | 59.8 ms | 3.2 ms | **18×** |
+| `channel_sweep` (300 steps, 16 channels) | 28.6 ms | 4.3 ms | **6.7×** |
+| Full `run_pipeline` (20 ECUs, mock) | 27.5 ms | 2.8 ms | **9.7×** |
+| Batch of 8 specs (mock, CPU-bound) | 148 ms | 37 ms | **4×** |
+| Batch of 8 specs @ 1.5 s LLM latency | 12.0 s | 1.5 s | **7.9×** |
+
+What changed:
+
+- **The trained duration model is cached.** It was being re-read from disk and
+  re-parsed as JSON once *per step, per program, per request*. It's now parsed
+  once and invalidated on `(path, mtime, size)`, so retraining is still picked
+  up without a restart.
+- **Batch mode overlaps its LLM calls.** Each spec is an independent blocking
+  network call, so a fleet ran at N × latency. They now share a bounded thread
+  pool (`BATCH_MAX_WORKERS`), which is why the last row above collapses from
+  12 s to 1.5 s. Input order is preserved, so the fleet rollup stays correctly
+  attributed to each vehicle.
+- **One pooled HTTP client instead of one per call.** Every request used to pay
+  a fresh DNS + TCP + TLS handshake, on each self-repair round and each spec.
+- **Fewer prompt tokens.** Specs and prior programs are sent as compact JSON
+  rather than `indent=2`, and replies are capped with `max_tokens`. Both cut
+  latency and cost without changing what the model is asked.
+- **Cheaper scheduling.** Earliest-free-channel selection uses a heap instead
+  of a linear scan, the sweep skips building a Pydantic object per step per
+  channel count, and it stops early once cycle time reaches the critical-path
+  floor (no further channel can beat it).
+
+Scheduler output is unchanged — verified byte-identical against the previous
+implementation across 9,200 comparisons on 400 randomly generated programs.
+
+---
+
 ## Deployment
 
 The whole app ships as one Docker image (backend serves the static frontend),
