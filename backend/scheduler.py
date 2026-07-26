@@ -16,6 +16,8 @@ the critical path so the UI can highlight exactly where the bottleneck is.
 
 from __future__ import annotations
 
+import heapq
+
 from .models import (
     ChannelScheduledStep,
     ChannelScheduleResult,
@@ -125,27 +127,34 @@ def schedule_with_channels(program: CommissioningProgram, channels: int) -> Chan
         return ChannelScheduleResult(channels=channels, cycle_time_seconds=0.0, schedule=[])
 
     finished_end: dict[int, float] = {}
-    channel_free_at = [0.0] * channels
     placed: dict[int, ChannelScheduledStep] = {}
 
-    remaining = list(steps)
-    # Greedy pass: repeatedly find the next step (in declared order) whose
-    # dependencies have all already been placed, and drop it on the
+    # Min-heap of (free_at, channel_index). Selecting the earliest-available
+    # channel used to be a linear `min(range(channels), ...)` scan per step,
+    # making this O(steps x channels) - and `channel_sweep` below calls it
+    # once per channel count, so the sweep was quadratic in the channel
+    # count. A heap makes selection O(log channels) instead. Ties break on
+    # the lower channel index, matching the old scan's behaviour so existing
+    # schedules are unchanged.
+    channel_heap = [(0.0, c) for c in range(channels)]
+    heapq.heapify(channel_heap)
+
+    # Greedy pass: walk the steps in declared order, and drop each on the
     # earliest-available channel. Since `steps` is already a valid
     # topological order (the validator enforces this upstream), a single
     # left-to-right pass suffices - no need to repeatedly rescan for
     # newly-ready steps.
-    for step in remaining:
+    for step in steps:
         dep_end = 0.0
         for dep in step.depends_on:
             if dep in finished_end:
                 dep_end = max(dep_end, finished_end[dep])
 
-        channel_idx = min(range(channels), key=lambda c: channel_free_at[c])
-        start = max(dep_end, channel_free_at[channel_idx])
+        free_at, channel_idx = heapq.heappop(channel_heap)
+        start = max(dep_end, free_at)
         end = start + step.estimated_seconds
+        heapq.heappush(channel_heap, (end, channel_idx))
 
-        channel_free_at[channel_idx] = end
         finished_end[step.order] = end
         placed[step.order] = ChannelScheduledStep(
             order=step.order, channel=channel_idx, start=round(start, 1), end=round(end, 1)
@@ -160,6 +169,36 @@ def schedule_with_channels(program: CommissioningProgram, channels: int) -> Chan
     )
 
 
+def _cycle_time_for_channels(steps: list, channels: int) -> float:
+    """Cycle time alone for a given channel count, skipping per-step objects.
+
+    Same greedy algorithm as ``schedule_with_channels``, but it does not
+    build a ``ChannelScheduledStep`` for every step. The sweep below only
+    ever reads the cycle time, and constructing (and validating) one Pydantic
+    model per step per channel count dominated the sweep's cost.
+    """
+    finished_end: dict[int, float] = {}
+    channel_heap = [(0.0, c) for c in range(channels)]
+    heapq.heapify(channel_heap)
+    makespan = 0.0
+
+    for step in steps:
+        dep_end = 0.0
+        for dep in step.depends_on:
+            if dep in finished_end:
+                dep_end = max(dep_end, finished_end[dep])
+
+        free_at, channel_idx = heapq.heappop(channel_heap)
+        end = max(dep_end, free_at) + step.estimated_seconds
+        heapq.heappush(channel_heap, (end, channel_idx))
+
+        finished_end[step.order] = end
+        if end > makespan:
+            makespan = end
+
+    return makespan
+
+
 def channel_sweep(program: CommissioningProgram, max_channels: int) -> ChannelSweepResult:
     """Cycle time for every channel count from 1 to max_channels.
 
@@ -168,11 +207,33 @@ def channel_sweep(program: CommissioningProgram, max_channels: int) -> ChannelSw
     channel contention) becomes the bottleneck - the same ceiling
     ``compute_optimization`` computes for unlimited channels.
     """
-    points = [
-        ChannelSweepPoint(
-            channels=n,
-            cycle_time_seconds=schedule_with_channels(program, n).cycle_time_seconds,
+    if max_channels < 1:
+        raise ValueError(f"max_channels must be >= 1, got {max_channels}.")
+
+    steps = sorted(program.steps, key=lambda s: s.order)
+    if not steps:
+        return ChannelSweepResult(
+            points=[
+                ChannelSweepPoint(channels=n, cycle_time_seconds=0.0)
+                for n in range(1, max_channels + 1)
+            ]
         )
-        for n in range(1, max(max_channels, 1) + 1)
-    ]
+
+    # The critical path is a hard floor on cycle time: no number of channels
+    # can beat it. Once the sweep reaches that floor, every remaining point
+    # is identical, so we stop scheduling and fill the tail in directly
+    # rather than re-running the greedy pass for each larger channel count.
+    floor = compute_optimization(program).critical_path_seconds
+
+    points: list[ChannelSweepPoint] = []
+    for n in range(1, max_channels + 1):
+        cycle = round(_cycle_time_for_channels(steps, n), 1)
+        points.append(ChannelSweepPoint(channels=n, cycle_time_seconds=cycle))
+        if cycle <= floor:
+            points.extend(
+                ChannelSweepPoint(channels=m, cycle_time_seconds=cycle)
+                for m in range(n + 1, max_channels + 1)
+            )
+            break
+
     return ChannelSweepResult(points=points)

@@ -28,6 +28,20 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout: int = 60
 
+    # Cap on the model's reply length. Commissioning programs are short JSON
+    # documents; without a cap a model can ramble well past the answer, and
+    # generation latency scales with the number of tokens actually produced.
+    llm_max_tokens: int = 4096
+
+    # How many vehicle specs a batch request may process concurrently. Each
+    # one is a blocking LLM call, so this is I/O fan-out, not CPU
+    # parallelism - raise it for faster fleets, lower it if the provider
+    # starts rate-limiting.
+    batch_max_workers: int = 8
+
+    # Connection-pool sizing for the shared HTTP client used to call the LLM.
+    llm_max_connections: int = 20
+
     # OpenRouter asks callers to identify their app via these optional
     # headers (used for their public leaderboard / rate-limit attribution).
     # Not secret, safe to leave at defaults.

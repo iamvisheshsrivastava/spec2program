@@ -8,6 +8,7 @@ all real work lives in the ``generator`` pipeline and its helpers.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
@@ -19,6 +20,7 @@ from .batch import run_batch
 from .config import settings
 from .duration_model import model_info as duration_model_info
 from .generator import generate
+from .llm_service import close_http_client
 from .models import (
     BatchRequest,
     BatchResponse,
@@ -43,7 +45,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATA_DIR = BASE_DIR / "data"
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifecycle: release pooled LLM connections on shutdown."""
+    yield
+    close_http_client()
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="spec2program",
     description=(
         "AI-assisted generation of vehicle commissioning programs from "
@@ -148,7 +158,10 @@ def optimize_channels(request: ChannelScheduleRequest) -> ChannelScheduleResult:
 @app.post("/api/optimize/channel-sweep", response_model=ChannelSweepResult)
 def optimize_channel_sweep(request: ChannelSweepRequest) -> ChannelSweepResult:
     """Cycle time for channel counts 1..max_channels, to plot diminishing returns."""
-    return channel_sweep(request.program, request.max_channels)
+    try:
+        return channel_sweep(request.program, request.max_channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.post("/api/recover", response_model=RecoveryResponse)

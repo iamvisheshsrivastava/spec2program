@@ -21,5 +21,13 @@ services:
         value: deepseek/deepseek-v4-flash
       - key: LLM_TEMPERATURE
         value: "0.1"
+      - key: LLM_MAX_TOKENS
+        value: "4096"
+      # Batch mode overlaps its LLM calls; keep the connection pool at least
+      # as large as the worker count so concurrent specs never queue.
+      - key: BATCH_MAX_WORKERS
+        value: "8"
+      - key: LLM_MAX_CONNECTIONS
+        value: "20"
       - key: CORS_ORIGINS
         value: "*"

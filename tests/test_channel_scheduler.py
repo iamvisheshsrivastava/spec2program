@@ -84,6 +84,40 @@ def test_empty_program_channel_schedule():
     assert result.schedule == []
 
 
+def test_sweep_short_circuit_matches_per_count_scheduling():
+    """channel_sweep stops scheduling once cycle time hits the critical-path
+    floor and fills the tail in directly. Every point must still equal what
+    schedule_with_channels would return for that channel count.
+    """
+    program = _program([
+        CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="a", estimated_seconds=4, depends_on=[]),
+        CommissioningStep(order=2, step_type=StepType.SECURITY_ACCESS,
+                           ecu_id="A", description="b", estimated_seconds=6, depends_on=[1]),
+        CommissioningStep(order=3, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="B", description="c", estimated_seconds=3, depends_on=[]),
+        CommissioningStep(order=4, step_type=StepType.VALIDATION,
+                           ecu_id="C", description="d", estimated_seconds=9, depends_on=[]),
+        CommissioningStep(order=5, step_type=StepType.FAULT_CLEAR,
+                           ecu_id="D", description="e", estimated_seconds=2, depends_on=[]),
+    ])
+    sweep = channel_sweep(program, max_channels=10)
+    assert len(sweep.points) == 10
+    for point in sweep.points:
+        expected = schedule_with_channels(program, point.channels)
+        assert point.cycle_time_seconds == expected.cycle_time_seconds
+        assert point.channels == expected.channels
+
+
+def test_sweep_rejects_invalid_max_channels():
+    program = _program([
+        CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="a", estimated_seconds=10, depends_on=[]),
+    ])
+    with pytest.raises(ValueError):
+        channel_sweep(program, max_channels=0)
+
+
 def test_zero_or_negative_channels_raises():
     program = _program([
         CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,

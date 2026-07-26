@@ -73,6 +73,57 @@ def test_model_info_none_without_trained_model(tmp_path, monkeypatch):
     assert duration_model.model_info() is None
 
 
+def test_cache_picks_up_a_retrained_model(tmp_path, monkeypatch):
+    """The parsed model is cached in memory for speed; retraining (rewriting
+    the file) must still be picked up rather than serving stale weights.
+    """
+    model_path = tmp_path / "duration_model.json"
+    n_features = len(duration_model.STEP_TYPES) + 2
+    monkeypatch.setattr(duration_model, "MODEL_PATH", model_path)
+
+    model_path.write_text(
+        json.dumps({"weights": [0.0] * (n_features - 1) + [7.0]}), encoding="utf-8"
+    )
+    assert duration_model.predict_seconds("validation") == 7.0
+
+    # Retrain: same path, different weights (and a different file size, so the
+    # stamp changes even on a coarse filesystem timestamp).
+    model_path.write_text(
+        json.dumps({"weights": [0.0] * (n_features - 1) + [21.5]}), encoding="utf-8"
+    )
+    assert duration_model.predict_seconds("validation") == 21.5
+
+
+def test_cache_invalidates_when_model_file_disappears(tmp_path, monkeypatch):
+    model_path = tmp_path / "duration_model.json"
+    n_features = len(duration_model.STEP_TYPES) + 2
+    monkeypatch.setattr(duration_model, "MODEL_PATH", model_path)
+
+    model_path.write_text(
+        json.dumps({"weights": [0.0] * (n_features - 1) + [7.0]}), encoding="utf-8"
+    )
+    assert duration_model.predict_seconds("validation") == 7.0
+
+    model_path.unlink()
+    assert duration_model.is_available() is False
+    assert duration_model.predict_seconds("validation") is None
+
+
+def test_repeated_predictions_are_consistent(tmp_path, monkeypatch):
+    """Memoised predictions must match a freshly computed one."""
+    model_path = tmp_path / "duration_model.json"
+    n_features = len(duration_model.STEP_TYPES) + 2
+    weights = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0][: n_features - 2] + [0.5, 2.0]
+    model_path.write_text(json.dumps({"weights": weights}), encoding="utf-8")
+    monkeypatch.setattr(duration_model, "MODEL_PATH", model_path)
+
+    first = duration_model.predict_seconds("flash_software", 10.0)
+    for _ in range(5):
+        assert duration_model.predict_seconds("flash_software", 10.0) == first
+    # A different feature pair must not collide with the cached one.
+    assert duration_model.predict_seconds("validation", 10.0) != first
+
+
 def test_apply_learned_durations_overrides_estimates(simple_spec, tmp_path, monkeypatch):
     from backend import generator
 

@@ -21,6 +21,8 @@ stays correct regardless of which candidate won.
 from __future__ import annotations
 
 import json
+import threading
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -79,29 +81,92 @@ def features(step_type: str, flash_size_proxy: float) -> list[float]:
     return build_features(step_type, flash_size_proxy, DEFAULT_FEATURE_SPEC)
 
 
-def is_available() -> bool:
-    """Whether a trained model file exists on disk."""
-    return MODEL_PATH.exists()
+# ---------------------------------------------------------------------------
+# Model cache
+# ---------------------------------------------------------------------------
+# The model file is small but ``predict_seconds()`` is called once per step,
+# for every step of every program, in every request. Re-reading and re-parsing
+# the JSON each time made the generation pipeline disk-bound for no reason.
+# We cache the parsed model (plus its weights as a ready-made numpy array) and
+# invalidate on the file's mtime/size, so retraining is still picked up
+# without a restart.
+_cache_lock = threading.Lock()
+_cached_stamp: tuple[str, float, int] | None = None
+_cached_model: dict | None = None
+
+
+def _file_stamp() -> tuple[str, float, int] | None:
+    """(path, mtime, size) of the model file, or None if it does not exist.
+
+    The path is part of the stamp because ``MODEL_PATH`` is a module global
+    that callers (and tests) may repoint at a different file; keying on
+    mtime/size alone could otherwise serve a stale model for a same-sized
+    file written within the same filesystem timestamp tick.
+    """
+    try:
+        st = MODEL_PATH.stat()
+    except OSError:
+        return None
+    return (str(MODEL_PATH), st.st_mtime, st.st_size)
 
 
 def _load_model() -> dict | None:
-    if not MODEL_PATH.exists():
+    """Return the parsed model, reading from disk only when it has changed."""
+    global _cached_stamp, _cached_model
+
+    stamp = _file_stamp()
+    if stamp is None:
+        with _cache_lock:
+            _cached_stamp, _cached_model = None, None
+        _predict_cached.cache_clear()
         return None
-    return json.loads(MODEL_PATH.read_text(encoding="utf-8"))
+
+    # Fast path: the file is unchanged since we last parsed it.
+    if stamp == _cached_stamp and _cached_model is not None:
+        return _cached_model
+
+    with _cache_lock:
+        # Re-check inside the lock; another thread may have just loaded it.
+        if stamp == _cached_stamp and _cached_model is not None:
+            return _cached_model
+
+        model = json.loads(MODEL_PATH.read_text(encoding="utf-8"))
+        # Pre-build the weight vector once instead of per prediction.
+        model["_weights_array"] = np.asarray(model["weights"], dtype=float)
+        _cached_model = model
+        _cached_stamp = stamp
+
+    # The weights changed, so any memoised predictions are now stale.
+    _predict_cached.cache_clear()
+    return _cached_model
+
+
+def is_available() -> bool:
+    """Whether a trained model file exists on disk."""
+    return _file_stamp() is not None
+
+
+@lru_cache(maxsize=512)
+def _predict_cached(step_type: str, flash_size_proxy: float) -> float:
+    """Memoised prediction for one (step_type, flash_size) pair.
+
+    A program repeats the same handful of step types many times over, so the
+    same feature vector is scored again and again. Cleared whenever the model
+    file changes (see ``_load_model``).
+    """
+    model = _cached_model
+    feature_spec = model.get("feature_spec", DEFAULT_FEATURE_SPEC)
+    x = np.asarray(build_features(step_type, flash_size_proxy, feature_spec), dtype=float)
+    predicted = float(np.dot(model["_weights_array"], x))
+    # Durations can't be negative or implausibly tiny; floor it.
+    return max(0.5, predicted)
 
 
 def predict_seconds(step_type: str, flash_size_proxy: float = 0.0) -> float | None:
     """Predict a step's duration in seconds, or None if no model is trained."""
-    model = _load_model()
-    if model is None:
+    if _load_model() is None:
         return None
-    weights = model["weights"]
-    feature_spec = model.get("feature_spec", DEFAULT_FEATURE_SPEC)
-    x = np.array(build_features(step_type, flash_size_proxy, feature_spec))
-    w = np.array(weights)
-    predicted = float(np.dot(w, x))
-    # Durations can't be negative or implausibly tiny; floor it.
-    return max(0.5, predicted)
+    return _predict_cached(step_type, flash_size_proxy)
 
 
 def model_info() -> dict | None:

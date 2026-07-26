@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from typing import Protocol
 
 import httpx
@@ -37,6 +38,44 @@ from .config import settings
 from .models import CommissioningProgram, CommissioningStep, ValidationIssue, VehicleSpec
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Shared HTTP client
+# ---------------------------------------------------------------------------
+# Every LLM call used to build its own ``httpx.Client``, which meant a fresh
+# DNS lookup, TCP connect and TLS handshake per request - hundreds of
+# milliseconds of pure setup on top of the model's own latency, paid again on
+# each self-repair round and on every spec in a batch. A single pooled client
+# keeps connections alive and amortises that away. httpx.Client is
+# thread-safe, which matters now that batch mode fans out across threads.
+_client_lock = threading.Lock()
+_client: httpx.Client | None = None
+
+
+def get_http_client() -> httpx.Client:
+    """Return the process-wide pooled HTTP client, creating it on first use."""
+    global _client
+    if _client is None:
+        with _client_lock:
+            if _client is None:
+                _client = httpx.Client(
+                    timeout=settings.llm_timeout,
+                    limits=httpx.Limits(
+                        max_connections=settings.llm_max_connections,
+                        max_keepalive_connections=settings.llm_max_connections,
+                    ),
+                )
+    return _client
+
+
+def close_http_client() -> None:
+    """Dispose of the pooled client (called on application shutdown)."""
+    global _client
+    with _client_lock:
+        if _client is not None:
+            _client.close()
+            _client = None
 
 
 # ---------------------------------------------------------------------------
@@ -326,12 +365,13 @@ def _call_chat_completions(
     """
     user_content = (
         "Vehicle specification (JSON):\n"
-        + spec.model_dump_json(indent=2)
+        + spec.model_dump_json()
         + "\n\nProduce the commissioning program as JSON now."
     )
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -348,14 +388,13 @@ def _call_chat_completions(
     logger.info("Calling LLM provider for program generation (model=%s, base_url=%s).", model, base_url)
     # Synchronous call - simple and robust. FastAPI runs this in a
     # threadpool because the route handler is declared `def`, not `async`.
-    with httpx.Client(timeout=settings.llm_timeout) as client:
-        resp = client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    resp = get_http_client().post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        json=payload,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     content = _extract_content(data)
     logger.debug("LLM generation call succeeded (model=%s).", model)
@@ -383,8 +422,8 @@ def _call_repair(
     user_content = (
         "The commissioning program below, which you previously generated for "
         "this vehicle specification, failed rule-based validation.\n\n"
-        f"Vehicle specification (JSON):\n{spec.model_dump_json(indent=2)}\n\n"
-        f"Your previous program (JSON):\n{json.dumps(previous_program, indent=2)}\n\n"
+        f"Vehicle specification (JSON):\n{spec.model_dump_json()}\n\n"
+        f"Your previous program (JSON):\n{json.dumps(previous_program, separators=(',', ':'))}\n\n"
         f"Validation issues found:\n{issues_text}\n\n"
         "Return a corrected program that resolves every issue above while "
         "still following all the rules in the system prompt. Return ONLY the "
@@ -393,6 +432,7 @@ def _call_repair(
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -404,14 +444,13 @@ def _call_repair(
         headers.update(extra_headers)
 
     logger.info("Calling LLM provider for self-repair (model=%s, base_url=%s).", model, base_url)
-    with httpx.Client(timeout=settings.llm_timeout) as client:
-        resp = client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    resp = get_http_client().post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        json=payload,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     content = _extract_content(data)
     logger.debug("LLM repair call succeeded (model=%s).", model)
@@ -569,11 +608,11 @@ def _call_recovery(
     next_order = max((s.order for s in program.steps), default=0) + 1
     user_content = (
         "Vehicle specification (JSON):\n"
-        + spec.model_dump_json(indent=2)
+        + spec.model_dump_json()
         + "\n\nProgram that was running (JSON):\n"
-        + program.model_dump_json(indent=2)
+        + program.model_dump_json()
         + f"\n\nFailed step (order {failed_step.order}):\n"
-        + failed_step.model_dump_json(indent=2)
+        + failed_step.model_dump_json()
         + f"\n\nFailure reason: {failure_reason}"
         + f"\n\nAlready-completed step orders you may depend on: {completed_orders}"
         + f"\nNumber new recovery steps starting at order {next_order}."
@@ -582,6 +621,7 @@ def _call_recovery(
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
+        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": RECOVERY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -596,14 +636,13 @@ def _call_recovery(
         "Calling LLM provider for recovery of failed step %d (model=%s, base_url=%s).",
         failed_step.order, model, base_url,
     )
-    with httpx.Client(timeout=settings.llm_timeout) as client:
-        resp = client.post(
-            f"{base_url.rstrip('/')}/chat/completions",
-            json=payload,
-            headers=headers,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+    resp = get_http_client().post(
+        f"{base_url.rstrip('/')}/chat/completions",
+        json=payload,
+        headers=headers,
+    )
+    resp.raise_for_status()
+    data = resp.json()
 
     content = _extract_content(data)
     logger.debug("LLM recovery call succeeded (model=%s).", model)

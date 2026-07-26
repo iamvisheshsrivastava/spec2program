@@ -11,14 +11,43 @@ improvement work), and the most frequently recurring validation issue.
 from __future__ import annotations
 
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
+from .config import settings
 from .generator import generate
 from .models import BatchAggregate, BatchResponse, VehicleSpec
 
 
+def _generate_all(specs: list[VehicleSpec]) -> list:
+    """Run ``generate`` for every spec, overlapping the LLM round-trips.
+
+    Each spec's pipeline is dominated by network latency (one LLM call, plus
+    up to two more if the self-repair loop fires), not CPU. Run sequentially,
+    a fleet of N vehicles costs N x that latency, which is what made batch
+    mode feel slow. These calls are independent, so a small thread pool lets
+    them wait concurrently - ``httpx`` releases the GIL while blocked on I/O,
+    so threads (not processes) are the right tool and there is nothing to
+    pickle.
+
+    The pool is deliberately bounded: unbounded fan-out would just trade our
+    latency for provider-side rate limiting. ``ThreadPoolExecutor.map``
+    preserves input order, so the fleet rollup stays deterministic and each
+    result still lines up with the spec it came from.
+    """
+    if not specs:
+        return []
+    if len(specs) == 1:
+        # Don't pay for a thread pool to run a single spec.
+        return [generate(specs[0])]
+
+    workers = min(len(specs), max(1, settings.batch_max_workers))
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="batch") as pool:
+        return list(pool.map(generate, specs))
+
+
 def run_batch(specs: list[VehicleSpec]) -> BatchResponse:
     """Run the full pipeline for every spec and compute a fleet-level rollup."""
-    results = [generate(spec) for spec in specs]
+    results = _generate_all(specs)
 
     if not results:
         return BatchResponse(
