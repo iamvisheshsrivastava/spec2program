@@ -352,8 +352,8 @@ What changed:
 - **One pooled HTTP client instead of one per call.** Every request used to pay
   a fresh DNS + TCP + TLS handshake, on each self-repair round and each spec.
 - **Fewer prompt tokens.** Specs and prior programs are sent as compact JSON
-  rather than `indent=2`, and replies are capped with `max_tokens`. Both cut
-  latency and cost without changing what the model is asked.
+  rather than `indent=2`, which cuts input tokens without changing what the
+  model is asked.
 - **Cheaper scheduling.** Earliest-free-channel selection uses a heap instead
   of a linear scan, the sweep skips building a Pydantic object per step per
   channel count, and it stops early once cycle time reaches the critical-path
@@ -361,6 +361,20 @@ What changed:
 
 Scheduler output is unchanged — verified byte-identical against the previous
 implementation across 9,200 comparisons on 400 randomly generated programs.
+
+**A caution learned the hard way:** do not set `LLM_MAX_TOKENS` casually.
+Reasoning models — including the default `deepseek/deepseek-v4-flash` — bill
+hidden reasoning tokens against that same budget. A cap of 4096 looks generous
+beside the ~1.2k tokens of visible JSON, but one measured run needed **8751**
+completion tokens; capped, two of three requests came back truncated
+(`finish_reason='length'`), failed to parse, and silently fell back to the mock
+planner, wasting the whole call. The cap is now unset by default, and a
+truncated reply raises an explicit error instead of a misleading JSON parse
+failure.
+
+Note also that end-to-end latency is dominated by the provider and varies a
+lot — repeated single generations of the same spec measured 15s, 37s, 58s and
+90s. Treat any single timing here as indicative, not precise.
 
 ---
 

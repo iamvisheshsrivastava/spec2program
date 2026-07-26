@@ -21,8 +21,10 @@ services:
         value: deepseek/deepseek-v4-flash
       - key: LLM_TEMPERATURE
         value: "0.1"
-      - key: LLM_MAX_TOKENS
-        value: "4096"
+      # LLM_MAX_TOKENS is deliberately NOT set. Reasoning models (the default
+      # deepseek-v4-flash included) count hidden reasoning tokens against it,
+      # so a cap sized against the visible JSON truncates the reply mid-document
+      # and throws away the whole call.
       # Batch mode overlaps its LLM calls; keep the connection pool at least
       # as large as the worker count so concurrent specs never queue.
       - key: BATCH_MAX_WORKERS

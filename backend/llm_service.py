@@ -111,14 +111,27 @@ specification, you produce a correct, safe, ordered commissioning program.
 
 Rules you MUST follow:
 - Only reference ECUs that appear in the specification's ECU list.
-- Only use a UDS service on an ECU if that ECU lists it as supported.
+- Only use a UDS service on an ECU if that ECU lists it as supported. This
+  rule OVERRIDES every rule below: never emit a step that uses an
+  unsupported service, even if another rule seems to ask for that step.
 - A security-access (0x27) step must come before any flash (0x34/0x36) or
   write-parameter (0x2E) step on the same ECU.
 - Every ECU that needs a software update (target_software_version differs from
   software_version) must be flashed, then validated.
 - Honour every rule listed in the specification's process_standards.
-- End the program by clearing diagnostic trouble codes and running a final
-  validation.
+- "depends_on" may only reference orders of steps that appear EARLIER in the
+  program. Never reference a later step, and never reference an order that
+  does not exist.
+- End the program with these two closing steps, chosen carefully:
+  1. ONE fault_clear step. Put it on an ECU whose supported list contains
+     0x14, and set uds_service to "0x14". Not every ECU supports 0x14 - do
+     NOT emit a fault_clear on an ECU that lacks it, and do NOT emit one per
+     ECU. If no ECU in the spec supports 0x14, omit the fault_clear step
+     entirely.
+  2. ONE final validation step. Prefer an ECU supporting 0x31 and use
+     "0x31"; otherwise an ECU supporting 0x22 and use "0x22"; if neither
+     exists, set uds_service to null.
+- Keep "notes" to at most one short sentence.
 
 Return ONLY valid JSON, no prose, matching exactly this schema:
 {
@@ -344,9 +357,26 @@ def _extract_content(data: dict) -> str:
     choices = data.get("choices")
     if not choices:
         raise ValueError(f"LLM response contained no 'choices': {data!r}")
-    message = choices[0].get("message")
+
+    choice = choices[0]
+
+    # Truncation deserves its own error. Left to fall through, a cut-off
+    # reply surfaces as an inscrutable "Expecting ',' delimiter" from the
+    # JSON parser, which points at the wrong problem entirely. Note that
+    # reasoning models bill their hidden reasoning against max_tokens, so a
+    # budget that looks ample next to the visible JSON can still truncate.
+    if choice.get("finish_reason") == "length":
+        usage = data.get("usage") or {}
+        raise ValueError(
+            "LLM response was truncated (finish_reason='length'); it hit the "
+            f"token budget after {usage.get('completion_tokens', '?')} completion "
+            "tokens. Raise or unset LLM_MAX_TOKENS - remember reasoning models "
+            "count hidden reasoning tokens against the same budget."
+        )
+
+    message = choice.get("message")
     if not message or "content" not in message:
-        raise ValueError(f"LLM response choice had no message content: {choices[0]!r}")
+        raise ValueError(f"LLM response choice had no message content: {choice!r}")
     content = message["content"]
     if not content:
         raise ValueError("LLM response message content was empty.")
@@ -371,7 +401,6 @@ def _call_chat_completions(
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -432,7 +461,6 @@ def _call_repair(
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
@@ -621,7 +649,6 @@ def _call_recovery(
     payload = {
         "model": model,
         "temperature": settings.llm_temperature,
-        "max_tokens": settings.llm_max_tokens,
         "messages": [
             {"role": "system", "content": RECOVERY_SYSTEM_PROMPT},
             {"role": "user", "content": user_content},

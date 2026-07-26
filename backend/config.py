@@ -28,10 +28,15 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.1
     llm_timeout: int = 60
 
-    # Cap on the model's reply length. Commissioning programs are short JSON
-    # documents; without a cap a model can ramble well past the answer, and
-    # generation latency scales with the number of tokens actually produced.
-    llm_max_tokens: int = 4096
+    # Optional cap on the model's reply length. Left unset by default, and
+    # you should think hard before setting it: reasoning models (including
+    # the default deepseek-v4-flash) bill their hidden reasoning tokens
+    # against this same budget, so a cap that looks generous next to the
+    # ~1.2k tokens of actual JSON can still truncate mid-document. A single
+    # observed run needed 8751 completion tokens to emit a 4.6 kB program.
+    # Truncated JSON fails to parse and silently costs a whole LLM call, so
+    # the default is "no cap".
+    llm_max_tokens: int | None = None
 
     # How many vehicle specs a batch request may process concurrently. Each
     # one is a blocking LLM call, so this is I/O fan-out, not CPU
