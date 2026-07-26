@@ -336,7 +336,14 @@ work targets everything *around* that call rather than the model itself
 | `channel_sweep` (300 steps, 16 channels) | 28.6 ms | 4.3 ms | **6.7×** |
 | Full `run_pipeline` (20 ECUs, mock) | 27.5 ms | 2.8 ms | **9.7×** |
 | Batch of 8 specs (mock, CPU-bound) | 148 ms | 37 ms | **4×** |
-| Batch of 8 specs @ 1.5 s LLM latency | 12.0 s | 1.5 s | **7.9×** |
+| Batch of 8 specs @ 1.5 s simulated latency | 12.0 s | 1.5 s | **7.9×** |
+| Batch of 6 specs, **live on Render + OpenRouter** | 334.8 s | 64.1 s | **5.23×** |
+
+The last row is the one that matters: measured end-to-end against the deployed
+free-tier instance calling the real model, with the sequential baseline taken
+from three consecutive single-spec generations on the same warm instance
+(60.6 s, 50.7 s, 56.1 s — mean 55.8 s). Six specs finished in barely longer
+than one, close to the 6× ceiling.
 
 What changed:
 
