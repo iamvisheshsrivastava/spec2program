@@ -293,9 +293,7 @@ something you'd have to reason about by hand.
 ## Runtime corrective actions
 
 Self-repair (above) handles a *planning-time* failure: the LLM produced a
-program that doesn't validate, before the vehicle ever reaches the line. The
-JD's task list also names corrective actions as an optimisation target more
-broadly, which includes a different, *runtime* failure: a step that actually
+program that doesn't validate, before the vehicle ever reaches the line. This also covers a different, *runtime* failure: a step that actually
 executed on the line and failed. `POST /api/recover` handles that case -
 given the program, which step failed, and a free-text reason (communication
 timeout, security access denied, flash verification failed, ...), it
@@ -315,9 +313,7 @@ recover" panel after generating a program.
 
 This prototype models diagnostics through classic **UDS** (Unified Diagnostic
 Services, ISO 14229) — one physical/transport binding, one service ID space.
-The JD's keyword list explicitly names **service-oriented vehicle
-diagnostics**: the industry direction (SOVD, ASAM's newer specification) is to
-expose the same diagnostic capabilities as a **RESTful, service-oriented API**
+A related industry direction is **service-oriented vehicle diagnostics** (SOVD, ASAM's newer specification), which exposes the same diagnostic capabilities as a **RESTful, service-oriented API**
 instead of a proprietary transport protocol, so any tool on the network can
 address a vehicle the same way it addresses any other web service.
 
