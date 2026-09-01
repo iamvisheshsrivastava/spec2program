@@ -28,9 +28,9 @@ from .models import (
     ChannelScheduleResult,
     ChannelSweepRequest,
     ChannelSweepResult,
-    CommissioningProgram,
     GenerateRequest,
     GenerateResponse,
+    OtxExportRequest,
     RecoveryRequest,
     RecoveryResponse,
     VehicleSpec,
@@ -38,6 +38,7 @@ from .models import (
 from .otx_export import to_otx_xml
 from .recovery import generate_recovery
 from .scheduler import channel_sweep, schedule_with_channels
+from .validator import is_valid, validate_program
 
 # Resolve project paths relative to this file so the app works regardless of
 # the current working directory (important inside Docker and on PaaS hosts).
@@ -174,8 +175,24 @@ def recover(request: RecoveryRequest) -> RecoveryResponse:
 
 
 @app.post("/api/export/otx")
-def export_otx(program: CommissioningProgram) -> Response:
-    """Export a generated program as an OTX-style XML procedure document."""
+def export_otx(request: OtxExportRequest) -> Response:
+    """Export a generated program as an OTX-style XML procedure document.
+
+    The request must include the ``VehicleSpec`` the program claims to be
+    for, and the program is re-validated against it before export - a bare,
+    client-fabricated ``CommissioningProgram`` that never went through
+    ``validate_program`` (e.g. referencing nonexistent ECUs or skipping
+    security access) is rejected with a 400 rather than exported as if it
+    were a real, certified pipeline output.
+    """
+    spec, program = request.spec, request.program
+    issues = validate_program(spec, program)
+    if not is_valid(issues):
+        messages = "; ".join(issue.message for issue in issues if issue.severity == "error")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Program failed validation against the given spec and cannot be exported: {messages}",
+        )
     try:
         xml = to_otx_xml(program)
     except Exception as exc:  # noqa: BLE001 - surface export failures as a clean 400

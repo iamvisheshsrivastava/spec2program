@@ -475,14 +475,28 @@ h2 {
 }
 
 /* The generator's free-text notes (e.g. a fallback explanation) shown
-   beneath the step table so nothing is ever hidden from the user. */
-.program-notes {
+   beneath the step table so nothing is ever hidden from the user - but
+   visually distinct from the pass/fail validation banner, since "notes" is
+   LLM-authored free text that structural validation does not check. */
+.program-notes-wrap {
   margin-top: 14px;
+}
+.program-notes-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--err, #b00);
+  margin-bottom: 4px;
+}
+.program-notes {
   padding: 10px 12px;
   border: var(--line);
+  border-left: 3px solid var(--err, #b00);
   font-size: 12px;
   color: var(--grey-600);
   font-family: var(--mono);
+  font-style: italic;
 }
 
 /* ------------------------------- About page ------------------------------ */

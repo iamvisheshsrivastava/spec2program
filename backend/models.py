@@ -21,7 +21,7 @@ the validator then checks that output against the ``VehicleSpec`` it came from.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Union
+from typing import Annotated, Union
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -43,22 +43,27 @@ class Ecu(BaseModel):
     # flags a PLM tool adds); accept and ignore anything we don't model.
     model_config = ConfigDict(extra="ignore")
 
-    ecu_id: str = Field(..., description="Stable identifier, e.g. 'BCM'.")
-    name: str = Field(..., description="Human-readable name.")
-    part_number: str = Field(..., description="Part number from the bill of materials.")
-    supplier: str | None = Field(None, description="Component supplier.")
+    # Bounds below are generous for any real BOM (a few hundred characters per
+    # free-text field, dozens of UDS services per ECU) while preventing a
+    # single request from carrying attacker-sized strings/lists into the LLM
+    # prompt or process memory - see issue #13.
+    ecu_id: str = Field(..., max_length=64, description="Stable identifier, e.g. 'BCM'.")
+    name: str = Field(..., max_length=200, description="Human-readable name.")
+    part_number: str = Field(..., max_length=100, description="Part number from the bill of materials.")
+    supplier: str | None = Field(None, max_length=200, description="Component supplier.")
     software_version: str | None = Field(
-        None, description="Currently installed software / flash version."
+        None, max_length=64, description="Currently installed software / flash version."
     )
     target_software_version: str | None = Field(
-        None, description="Software version the vehicle should end up with."
+        None, max_length=64, description="Software version the vehicle should end up with."
     )
     # UDS = Unified Diagnostic Services (ISO 14229). We reference services by
     # their common request SIDs, e.g. '0x10' (DiagnosticSessionControl),
     # '0x27' (SecurityAccess), '0x2E' (WriteDataByIdentifier), '0x34'/'0x36'
     # (RequestDownload / TransferData) used for flashing.
-    supported_uds_services: list[str] = Field(
+    supported_uds_services: list[Annotated[str, Field(max_length=16)]] = Field(
         default_factory=list,
+        max_length=64,
         description="UDS service IDs this ECU supports, e.g. ['0x10','0x27'].",
     )
 
@@ -71,8 +76,11 @@ class VehicleSpec(BaseModel):
     # schema only enforces the fields the pipeline actually depends on.
     model_config = ConfigDict(extra="ignore")
 
-    vehicle_id: str = Field(..., description="Order / VIN-like identifier.")
-    model: str = Field(..., description="Vehicle model, e.g. 'ID.4'.")
+    # Bounds below mirror the ones on Ecu (issue #13): generous for any real
+    # spec, but enough to stop a single /api/generate call from carrying an
+    # oversized spec into the LLM prompt (spec.model_dump_json()) or memory.
+    vehicle_id: str = Field(..., max_length=100, description="Order / VIN-like identifier.")
+    model: str = Field(..., max_length=100, description="Vehicle model, e.g. 'ID.4'.")
     model_year: int = Field(..., description="Model year.")
 
     # Vehicle configuration: the option codes / features that determine which
@@ -80,16 +88,21 @@ class VehicleSpec(BaseModel):
     # strings, booleans, or numbers - see ConfigValue above.
     configuration: dict[str, ConfigValue] = Field(
         default_factory=dict,
+        max_length=200,
         description="Option/feature codes, e.g. {'drivetrain':'BEV','left_hand_drive':true}.",
     )
 
     # Bill of materials expressed as the list of ECUs to be commissioned.
-    ecus: list[Ecu] = Field(default_factory=list, description="ECUs / components.")
+    # 300 ECUs is far beyond any real vehicle's BOM.
+    ecus: list[Ecu] = Field(default_factory=list, max_length=300, description="ECUs / components.")
 
     # Process standards the generated program must respect (safety gates,
-    # ordering rules, mandatory validation steps, ...).
-    process_standards: list[str] = Field(
+    # ordering rules, mandatory validation steps, ...). Also bounded per-entry
+    # (not just list length) since these strings are told to the LLM as rules
+    # to "honour" - see the prompt-injection write-up in issue #14.
+    process_standards: list[Annotated[str, Field(max_length=500)]] = Field(
         default_factory=list,
+        max_length=100,
         description="Named process rules the program must honour.",
     )
 
@@ -246,6 +259,22 @@ class ChannelSweepRequest(BaseModel):
     max_channels: int = Field(8, ge=1, le=32, description="Sweep channel counts from 1 to this.")
 
 
+class OtxExportRequest(BaseModel):
+    """Request body for POST /api/export/otx.
+
+    Exporting to OTX must not be possible for a bare, unvalidated program: a
+    client could otherwise fabricate a ``CommissioningProgram`` that never
+    went through ``validate_program`` and have it exported as if it were a
+    real pipeline output (see issue #15). Mirroring ``RecoveryRequest``, the
+    export request must carry the ``VehicleSpec`` the program claims to be
+    for, so the export route can re-run ``validate_program`` before allowing
+    the export.
+    """
+
+    spec: VehicleSpec
+    program: CommissioningProgram
+
+
 class RecoveryRequest(BaseModel):
     """Request body for POST /api/recover.
 
@@ -258,7 +287,7 @@ class RecoveryRequest(BaseModel):
     spec: VehicleSpec
     program: CommissioningProgram
     failed_step_order: int
-    failure_reason: str
+    failure_reason: str = Field(..., max_length=500)
 
 
 class RecoveryResponse(BaseModel):

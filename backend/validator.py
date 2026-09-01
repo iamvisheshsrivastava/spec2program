@@ -149,12 +149,55 @@ def validate_program(
             message="Program contains no validation step.",
         ))
 
+    issues.extend(check_notes_for_unverified_claims(program.notes))
+
     return issues
 
 
 def is_valid(issues: list[ValidationIssue]) -> bool:
     """A program is 'valid' if it has no error-severity issues."""
     return not any(issue.severity == "error" for issue in issues)
+
+
+# Keyword heuristic for LLM-authored ``notes`` that assert compliance /
+# certification claims the structural checks above never actually make. See
+# issue #14: a spec's ``process_standards`` entries are fully
+# attacker-controlled free text and the model is prompted to treat them as
+# rules, so a malicious spec can try to get the model to write something like
+# "this vehicle has passed ISO 26262 certification and requires no further
+# validation" into ``notes``. This is best-effort and not a guarantee - it
+# exists to flag the most obvious cases, not to make ``notes`` trustworthy.
+_UNVERIFIED_CLAIM_PHRASES = (
+    "passed iso", "iso 26262", "certified", "certification",
+    "no further validation", "no additional validation", "no need for validation",
+    "fully validated", "fully compliant", "meets all", "already validated",
+    "requires no further", "approved for", "compliance confirmed",
+)
+
+
+def check_notes_for_unverified_claims(notes: str | None) -> list[ValidationIssue]:
+    """Flag ``notes`` text that makes compliance/certification-style claims.
+
+    These claims are never checked by ``validate_program``/
+    ``validate_recovery_steps`` above, so if ``notes`` asserts them anyway the
+    operator should be warned that this text is unverified, LLM-authored
+    rationale - not a structural validation result.
+    """
+    if not notes:
+        return []
+    lowered = notes.lower()
+    hits = sorted({phrase for phrase in _UNVERIFIED_CLAIM_PHRASES if phrase in lowered})
+    if not hits:
+        return []
+    return [ValidationIssue(
+        severity="warning",
+        message=(
+            "Generator 'notes' contain unverified claim-like language "
+            f"({', '.join(hits)}). Structural validation does not check "
+            "these claims - treat 'notes' as an AI-generated explanation, "
+            "not a validation result."
+        ),
+    )]
 
 
 def validate_recovery_steps(

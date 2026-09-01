@@ -142,8 +142,13 @@
           </table>
         </div>
 
-        <!-- Free-text notes from the generator (e.g. rationale, fallback explanation). -->
-        <div id="programNotes" class="program-notes" hidden></div>
+        <!-- Free-text notes from the generator (e.g. rationale, fallback explanation).
+             Explicitly labelled as unvalidated AI output so it is never read as
+             carrying the same authority as the structural validation banner above. -->
+        <div id="programNotesWrap" class="program-notes-wrap" hidden>
+          <div class="program-notes-label">AI-generated explanation — not structurally validated</div>
+          <div id="programNotes" class="program-notes"></div>
+        </div>
 
         <!-- ============== SCHEDULE / GANTT (unlimited parallelism) ============== -->
         <div class="schedule-block">

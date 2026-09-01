@@ -25,6 +25,7 @@ const el = {
   loadingState: document.getElementById("loadingState"),
   resultState: document.getElementById("resultState"),
   programNotes: document.getElementById("programNotes"),
+  programNotesWrap: document.getElementById("programNotesWrap"),
   metrics: document.getElementById("metrics"),
   validationBanner: document.getElementById("validationBanner"),
   issuesBlock: document.getElementById("issuesBlock"),
@@ -376,11 +377,15 @@ function renderResult(data) {
     .join("");
 
   // Generator notes (rationale, or a transparent fallback explanation).
+  // Free text authored by the LLM - never checked by structural validation,
+  // so it is shown clearly labelled and separate from the validation banner
+  // above (see issue #14: a spec's process_standards can try to get the
+  // model to write false certification/compliance claims into notes).
   if (program.notes) {
-    el.programNotes.hidden = false;
+    el.programNotesWrap.hidden = false;
     el.programNotes.textContent = program.notes;
   } else {
-    el.programNotes.hidden = true;
+    el.programNotesWrap.hidden = true;
     el.programNotes.textContent = "";
   }
 
@@ -507,12 +512,12 @@ el.specInput.addEventListener("input", () => {
 
 /* ------------------------------ OTX export ------------------------------- */
 el.exportOtxBtn.addEventListener("click", async () => {
-  if (!lastProgram) return;
+  if (!lastProgram || !lastSpec) return;
   try {
     const res = await fetch("/api/export/otx", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(lastProgram),
+      body: JSON.stringify({ spec: lastSpec, program: lastProgram }),
     });
     if (!res.ok) {
       const payload = await res.json().catch(() => null);
@@ -733,7 +738,11 @@ function renderRecovery(data) {
       <thead><tr><th>#</th><th>Type</th><th>ECU</th><th>UDS</th><th>Description</th></tr></thead>
       <tbody>${stepsRows}</tbody>
     </table>
-    ${data.notes ? `<p class="program-notes" style="display:block;margin-top:12px;">${esc(data.notes)}</p>` : ""}
+    ${data.notes ? `
+    <div class="program-notes-wrap" style="margin-top:12px;">
+      <div class="program-notes-label">AI-generated explanation — not structurally validated</div>
+      <p class="program-notes" style="display:block;">${esc(data.notes)}</p>
+    </div>` : ""}
     ${issuesHtml}
   `;
 }

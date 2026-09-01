@@ -27,7 +27,7 @@ from .models import (
     StepType,
     VehicleSpec,
 )
-from .validator import is_valid, validate_recovery_steps
+from .validator import check_notes_for_unverified_claims, is_valid, validate_recovery_steps
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ def generate_recovery(request: RecoveryRequest) -> RecoveryResponse:
     issues = validate_recovery_steps(
         spec, recovery_steps, already_unlocked=unlocked, already_seen_orders=seen
     )
+    issues.extend(check_notes_for_unverified_claims(notes))
 
     return RecoveryResponse(
         recovery_steps=recovery_steps,
