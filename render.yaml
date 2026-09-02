@@ -17,11 +17,10 @@ services:
         value: openrouter
       - key: LLM_API_KEY
         sync: false
-      # Selected by measurement (see README "Choosing the model"): fastest
-      # model that was rule-valid on every run, and cheaper per generation
-      # than the reasoning models tried.
+      # Standardized on GLM-4.6 across all deployed apps for cost
+      # consolidation onto a single cheap OpenRouter model.
       - key: LLM_MODEL
-        value: meta-llama/llama-3.3-70b-instruct
+        value: z-ai/glm-4.6
       - key: LLM_TEMPERATURE
         value: "0.1"
       # LLM_MAX_TOKENS is deliberately NOT set. Reasoning models (the default
