@@ -446,6 +446,15 @@ the models that pass.
 Reproduce or extend with `scripts/eval_harness.py`. Switching model is one
 environment variable (`LLM_MODEL`) with no code change.
 
+**Note on the live demo:** the code default (`.env.example`, `docker-compose.yml`,
+`backend/config.py`) is still `meta-llama/llama-3.3-70b-instruct`, per the
+table above. The deployed instance at spec2program.onrender.com currently
+runs `z-ai/glm-4.6` instead — that switch (`render.yaml`) was a cost
+consolidation across several unrelated projects sharing one OpenRouter
+account, not a re-run of this bake-off. `GET /api/health` always reports
+whichever model is actually configured, so it's the source of truth if the
+two drift.
+
 ---
 
 ## Deployment
@@ -458,7 +467,10 @@ so any container host works. Free option used for the live demo:
 2. On [render.com](https://render.com), New → Web Service → connect the repo →
    Render detects the `Dockerfile` automatically.
 3. Set environment variables: `LLM_PROVIDER=openrouter`, `LLM_API_KEY=...`,
-      `LLM_MODEL=meta-llama/llama-3.3-70b-instruct`.
+   `LLM_MODEL=...` (the checked-in `render.yaml` blueprint already sets
+   `LLM_MODEL`, so a Blueprint deploy needs only the API key; see the note
+   under "Choosing the model" for why the live instance's value can differ
+   from the code default).
 4. Deploy. Free instances sleep after inactivity (first request after a while
    takes ~30s to wake up); everything after that is instant.
 
