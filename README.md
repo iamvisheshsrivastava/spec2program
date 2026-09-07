@@ -28,6 +28,29 @@ take up to ~30s to wake it up.)
 
 ---
 
+## Screenshots
+
+Captured against the live deployment at spec2program.onrender.com.
+
+**Vehicle specification input** — a bundled sample spec (VW ID.4, 5 ECUs) loaded
+into the editor, ready to generate:
+
+![Vehicle specification input UI](docs/screenshots/02_input_ui.png)
+
+**Generated commissioning program** — the resulting 18-step program for that
+spec: passed all structural/UDS/safety checks, with per-ECU schedule, critical-path
+speedup (3.69x), and the runtime-recovery simulator below it:
+
+![Generated commissioning program output](docs/screenshots/03_generated_program.png)
+
+**`/api/health`** — the source of truth for which LLM the live instance is
+actually running (`z-ai/glm-4.6` via OpenRouter, plus the trained duration
+model's AutoML metadata):
+
+![/api/health response showing the live model](docs/screenshots/01_api_health.png)
+
+---
+
 ## Why this project exists
 
 Today, programs for vehicle commissioning are created from specifications that
