@@ -170,6 +170,12 @@ def recover(request: RecoveryRequest) -> RecoveryResponse:
     """Generate a corrective sub-program for a step that failed at runtime."""
     try:
         return generate_recovery(request)
+    except ValueError as exc:
+        # generate_recovery() raises ValueError for bad client input (e.g. a
+        # failed_step_order that does not exist in the given program) - a 400,
+        # not a server fault. Matches how /api/optimize/channels and
+        # /api/optimize/channel-sweep report their own ValueErrors.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
