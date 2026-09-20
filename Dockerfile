@@ -21,6 +21,10 @@ COPY backend/ ./backend/
 COPY frontend/ ./frontend/
 COPY data/ ./data/
 
+# Drop root privileges at runtime.
+RUN useradd --create-home --uid 10001 app && chown -R app /app
+USER app
+
 # The container listens on 8000. Hosting platforms (Render, Railway, Fly.io,
 # Heroku, Azure) usually inject a $PORT env var, which we honor at runtime.
 EXPOSE 8000

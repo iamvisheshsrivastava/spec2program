@@ -77,3 +77,27 @@ def test_recover_returns_400_for_unknown_failed_step_order(simple_spec):
     )
     assert resp.status_code == 400
     assert "999999" in resp.json()["detail"]
+
+
+def test_batch_rejects_oversized_request():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
+    resp = TestClient(app).post("/api/batch", json={"specs": [{}] * 26})
+    assert resp.status_code == 422
+
+
+def test_generate_500_hides_upstream_error(monkeypatch):
+    from fastapi.testclient import TestClient
+    from backend import main
+
+    def boom(_spec):
+        raise RuntimeError("https://secret.upstream/url failed")
+
+    monkeypatch.setattr(main, "generate", boom)
+    client = TestClient(main.app, raise_server_exceptions=False)
+    spec = client.get("/api/samples").json()[0]["file"]
+    body = {"spec": client.get(f"/api/samples/{spec}").json()}
+    resp = client.post("/api/generate", json=body)
+    assert resp.status_code == 500
+    assert "secret.upstream" not in resp.text

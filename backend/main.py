@@ -8,6 +8,8 @@ all real work lives in the ``generator`` pipeline and its helpers.
 from __future__ import annotations
 
 import json
+import logging
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -42,6 +44,19 @@ from .validator import is_valid, validate_program
 
 # Resolve project paths relative to this file so the app works regardless of
 # the current working directory (important inside Docker and on PaaS hosts).
+logger = logging.getLogger(__name__)
+
+
+def _internal_error(exc: Exception) -> HTTPException:
+    """Log the real error server-side; return a generic message + correlation id."""
+    error_id = uuid.uuid4().hex[:12]
+    logger.error("Unhandled error %s: %r", error_id, exc, exc_info=exc)
+    return HTTPException(
+        status_code=500,
+        detail=f"Internal error (reference {error_id}). See server logs.",
+    )
+
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR / "frontend"
 DATA_DIR = BASE_DIR / "data"
@@ -68,7 +83,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
-    allow_credentials=True,
+    allow_credentials=False,  # no cookies/auth are used; '*' + credentials is invalid
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -133,7 +148,7 @@ def generate_program(request: GenerateRequest) -> GenerateResponse:
             detail=f"The generator returned an invalid program: {exc}",
         ) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _internal_error(exc) from exc
 
 
 @app.post("/api/batch", response_model=BatchResponse)
@@ -144,7 +159,7 @@ def generate_batch(request: BatchRequest) -> BatchResponse:
     try:
         return run_batch(request.specs)
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _internal_error(exc) from exc
 
 
 @app.post("/api/optimize/channels", response_model=ChannelScheduleResult)
@@ -177,7 +192,7 @@ def recover(request: RecoveryRequest) -> RecoveryResponse:
         # /api/optimize/channel-sweep report their own ValueErrors.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise _internal_error(exc) from exc
 
 
 @app.post("/api/export/otx")

@@ -40,3 +40,8 @@ Thumbs.db
 # ---- Claude / local agent ----
 .claude/
 CLAUDE.md
+
+# ---- Local scratch files ----
+delete_test.txt
+data/_eval_*.txt
+server_*.log

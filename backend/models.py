@@ -320,7 +320,9 @@ class GenerateResponse(BaseModel):
 class BatchRequest(BaseModel):
     """Request body for POST /api/batch."""
 
-    specs: list[VehicleSpec] = Field(..., description="One or more vehicle specs.")
+    specs: list[VehicleSpec] = Field(
+        ..., max_length=25, description="One or more vehicle specs (max 25)."
+    )
 
 
 class BatchAggregate(BaseModel):
