@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -55,6 +56,24 @@ def _internal_error(exc: Exception) -> HTTPException:
         status_code=500,
         detail=f"Internal error (reference {error_id}). See server logs.",
     )
+
+
+_UNSAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_filename_component(value: str, *, fallback: str = "export") -> str:
+    """Sanitise a user-controlled value for use inside a filename.
+
+    ``value`` (e.g. a ``vehicle_id``) ultimately lands inside a
+    ``Content-Disposition`` header, so it must never be able to inject CR/LF
+    (header/response splitting) or break out of the quoted-string via an
+    embedded ``"`` or ``\\``. Rather than trying to escape those characters,
+    strip everything that is not a conservative, known-safe character
+    (ASCII letters/digits, dot, dash, underscore) - this also sidesteps any
+    header-encoding concerns for non-ASCII input.
+    """
+    cleaned = _UNSAFE_FILENAME_CHARS.sub("_", value).strip("._")
+    return cleaned[:100] or fallback
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -221,11 +240,12 @@ def export_otx(request: OtxExportRequest) -> Response:
             status_code=400,
             detail=f"Could not export program to OTX: {exc}",
         ) from exc
+    safe_vehicle_id = _safe_filename_component(program.vehicle_id)
     return Response(
         content=xml,
         media_type="application/xml",
         headers={
-            "Content-Disposition": f'attachment; filename="{program.vehicle_id}_otx.xml"'
+            "Content-Disposition": f'attachment; filename="{safe_vehicle_id}_otx.xml"'
         },
     )
 

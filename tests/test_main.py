@@ -46,6 +46,35 @@ def test_export_otx_succeeds_for_a_valid_program(simple_spec):
     assert "<otx" in resp.text
 
 
+def test_export_otx_sanitizes_vehicle_id_in_content_disposition(simple_spec, monkeypatch):
+    # See issue #22: vehicle_id is attacker-controlled free text and was being
+    # interpolated directly into the Content-Disposition header, allowing
+    # header/CRLF injection (and a broken quoted-string via embedded `"`).
+    monkeypatch.setattr("backend.main.validate_program", lambda spec, program: [])
+
+    program = CommissioningProgram.model_validate(
+        MockProvider().generate_program(simple_spec)
+    )
+    malicious_id = 'evil"\r\nX-Injected: 1\r\nSet-Cookie: a=b'
+    program = program.model_copy(update={"vehicle_id": malicious_id})
+
+    resp = client.post(
+        "/api/export/otx",
+        json={
+            "spec": simple_spec.model_dump(mode="json"),
+            "program": program.model_dump(mode="json"),
+        },
+    )
+    assert resp.status_code == 200
+    disposition = resp.headers["content-disposition"]
+    assert "\r" not in disposition
+    assert "\n" not in disposition
+    assert '"' not in disposition.split("filename=", 1)[1][1:-1]
+    assert "X-Injected" not in resp.headers
+    assert disposition.startswith('attachment; filename="')
+    assert disposition.endswith('_otx.xml"')
+
+
 def test_optimize_channels_returns_400_for_invalid_channels(simple_spec):
     program = CommissioningProgram.model_validate(
         MockProvider().generate_program(simple_spec)

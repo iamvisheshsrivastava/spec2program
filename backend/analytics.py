@@ -27,7 +27,11 @@ def analyse_program(
     by_type = Counter(step.step_type.value for step in program.steps)
 
     # ECU coverage: how many of the vehicle's ECUs the program actually touches.
-    ecus_covered = len({step.ecu_id for step in program.steps})
+    # Intersect against the spec's known ECU ids so a step referencing an
+    # ECU that isn't part of the vehicle (e.g. a stale/fabricated program -
+    # see issue #23) can't inflate coverage above ecus_total.
+    known_ecu_ids = {ecu.ecu_id for ecu in spec.ecus}
+    ecus_covered = len({step.ecu_id for step in program.steps} & known_ecu_ids)
 
     # Parallelisation headroom: steps that declare no dependencies could, in
     # principle, be executed concurrently on multi-channel tester hardware.
