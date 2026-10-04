@@ -127,3 +127,33 @@ def test_zero_or_negative_channels_raises():
         schedule_with_channels(program, channels=0)
     with pytest.raises(ValueError):
         schedule_with_channels(program, channels=-5)
+
+
+def test_blocked_step_ties_break_toward_busiest_channel():
+    """Issue #6 regression: when several channels give an identical start
+    time for a dependency-blocked step, the busiest channel (not the
+    idlest) should be chosen, so the genuinely idle channel stays free for
+    later, independent work instead of being burned for no benefit.
+
+    Steps 1->2->3 form a chain that keeps re-tying both channels at the
+    same forced start time; a buggy "pick the earliest-free channel"
+    tie-break walks that whole chain back and forth across both channels,
+    dragging channel 1 into business it never needed. The fix keeps
+    channel 1 idle throughout, so the independent step 4 can start at t=0.
+    """
+    program = _program([
+        CommissioningStep(order=1, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="a", estimated_seconds=10, depends_on=[]),
+        CommissioningStep(order=2, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="b", estimated_seconds=30, depends_on=[1]),
+        CommissioningStep(order=3, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="A", description="c", estimated_seconds=10, depends_on=[2]),
+        CommissioningStep(order=4, step_type=StepType.DIAGNOSTIC_SESSION,
+                           ecu_id="B", description="independent", estimated_seconds=5, depends_on=[]),
+    ])
+    result = schedule_with_channels(program, channels=2)
+    by_order = {s.order: s for s in result.schedule}
+    # The dependent chain (1->2->3) should stay on one channel throughout,
+    # leaving the other channel free the whole time for step 4.
+    assert by_order[4].start == 0.0
+    assert by_order[4].channel != by_order[1].channel

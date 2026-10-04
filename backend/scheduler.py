@@ -12,6 +12,15 @@ This module computes that lower bound with a standard earliest-start-time
 forward pass over the step dependency graph (the same idea as CPM / PERT
 scheduling used in project management), and reconstructs which steps sit on
 the critical path so the UI can highlight exactly where the bottleneck is.
+
+Issue #7: a step's ``depends_on`` is client/LLM-controlled data, not a
+guaranteed-valid DAG. A forward reference (a step depending on a later
+order) or a cycle must not be silently dropped - that produces confidently
+wrong numbers (too-low critical path, too-high speedup) instead of an error.
+``_topological_order`` below makes that explicit: it raises ``ValueError``
+for a dangling or cyclic dependency, and both scheduling functions walk
+steps in the resulting topological order rather than trusting declared
+``order`` to already be one.
 """
 
 from __future__ import annotations
@@ -24,13 +33,68 @@ from .models import (
     ChannelSweepPoint,
     ChannelSweepResult,
     CommissioningProgram,
+    CommissioningStep,
     OptimizationResult,
     ScheduledStep,
 )
 
 
+def _topological_order(steps: list[CommissioningStep]) -> list[CommissioningStep]:
+    """Return ``steps`` in a valid topological order of their ``depends_on`` edges.
+
+    Raises ``ValueError`` if a step depends on an order that does not exist
+    in ``steps``, or if the dependency graph contains a cycle (including a
+    step that depends on a later-declared order in a way that can never be
+    satisfied). Kahn's algorithm, with ties broken by ascending ``order`` so
+    a well-formed program (already a valid 1..N sequence with only backward
+    dependencies) sorts identically to before.
+    """
+    by_order = {s.order: s for s in steps}
+    if len(by_order) != len(steps):
+        raise ValueError("Duplicate step 'order' values in program.")
+
+    # dependents[d] = steps that list d as a prerequisite.
+    dependents: dict[int, list[int]] = {o: [] for o in by_order}
+    in_degree: dict[int, int] = {o: 0 for o in by_order}
+
+    for step in steps:
+        for dep in step.depends_on:
+            if dep not in by_order:
+                raise ValueError(
+                    f"Step {step.order} depends on step {dep}, which does not exist "
+                    f"in this program."
+                )
+            dependents[dep].append(step.order)
+            in_degree[step.order] += 1
+
+    ready = [o for o, deg in in_degree.items() if deg == 0]
+    heapq.heapify(ready)
+
+    ordered: list[CommissioningStep] = []
+    while ready:
+        order = heapq.heappop(ready)
+        ordered.append(by_order[order])
+        for nxt in dependents[order]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                heapq.heappush(ready, nxt)
+
+    if len(ordered) != len(steps):
+        remaining = sorted(set(by_order) - {s.order for s in ordered})
+        raise ValueError(
+            f"Program's step dependencies form a cycle (unreachable orders: {remaining})."
+        )
+    return ordered
+
+
 def compute_optimization(program: CommissioningProgram) -> OptimizationResult:
-    """Compute the critical-path schedule and speedup vs. the sequential plan."""
+    """Compute the critical-path schedule and speedup vs. the sequential plan.
+
+    Raises ``ValueError`` if ``program.steps`` has a dangling or cyclic
+    dependency (issue #7) - callers that accept client-supplied programs
+    should catch this and report it explicitly rather than trusting the
+    numbers that would otherwise come out.
+    """
 
     steps = program.steps
     if not steps:
@@ -42,26 +106,22 @@ def compute_optimization(program: CommissioningProgram) -> OptimizationResult:
             schedule=[],
         )
 
-    steps_by_order = {s.order: s for s in steps}
+    ordered_steps = _topological_order(steps)
     sequential_seconds = sum(s.estimated_seconds for s in steps)
 
-    # Forward pass: earliest_start[order] = the max end time of all of its
-    # prerequisites (0 if it has none). Steps are processed in declared
-    # 'order' - the program is already meant to be a valid topological order,
-    # and the validator flags it if a dependency points forward, so this
-    # simple single-pass approach is safe for well-formed programs.
+    # Forward pass over the topological order: earliest_start[order] = the
+    # max end time of all of its prerequisites (0 if it has none).
     earliest: dict[int, tuple[float, float]] = {}  # order -> (start, end)
     predecessor_on_path: dict[int, int | None] = {}
 
-    for step in sorted(steps, key=lambda s: s.order):
+    for step in ordered_steps:
         best_start = 0.0
         best_pred: int | None = None
         for dep in step.depends_on:
-            if dep in earliest:
-                dep_end = earliest[dep][1]
-                if dep_end > best_start:
-                    best_start = dep_end
-                    best_pred = dep
+            dep_end = earliest[dep][1]
+            if dep_end > best_start:
+                best_start = dep_end
+                best_pred = dep
         end = best_start + step.estimated_seconds
         earliest[step.order] = (best_start, end)
         predecessor_on_path[step.order] = best_pred
@@ -112,48 +172,45 @@ def schedule_with_channels(program: CommissioningProgram, channels: int) -> Chan
 
     This is resource-constrained project scheduling (RCPS), which is
     NP-hard in general. We use the standard, well-established heuristic:
-    greedy list scheduling - at each step, assign the next dependency-ready
-    step (lowest declared order first, matching the program's own intended
-    sequencing) to whichever channel frees up soonest. This is not
-    guaranteed optimal, but it's the same class of heuristic used in real
-    RCPS tooling, and it is deterministic and cheap to compute for every
-    channel count in the sweep below.
+    greedy list scheduling - at each step (processed in topological order,
+    so a forward/backward dependency is always honoured rather than
+    silently skipped, see issue #7), assign it to whichever free-or-soon
+    channel actually gives it the earliest start time, breaking ties toward
+    the *busiest* channel that still meets that start time (issue #6) so an
+    idle channel is preserved for whatever becomes ready next rather than
+    being burned on a step that was going to start at the same time anyway.
+
+    Raises ``ValueError`` if ``channels < 1`` or the dependency graph is not
+    a DAG (see ``_topological_order``).
     """
     if channels < 1:
         raise ValueError(f"channels must be >= 1, got {channels}.")
 
-    steps = sorted(program.steps, key=lambda s: s.order)
+    steps = program.steps
     if not steps:
         return ChannelScheduleResult(channels=channels, cycle_time_seconds=0.0, schedule=[])
 
+    ordered_steps = _topological_order(steps)
+
     finished_end: dict[int, float] = {}
     placed: dict[int, ChannelScheduledStep] = {}
+    channel_free_at = [0.0] * channels
 
-    # Min-heap of (free_at, channel_index). Selecting the earliest-available
-    # channel used to be a linear `min(range(channels), ...)` scan per step,
-    # making this O(steps x channels) - and `channel_sweep` below calls it
-    # once per channel count, so the sweep was quadratic in the channel
-    # count. A heap makes selection O(log channels) instead. Ties break on
-    # the lower channel index, matching the old scan's behaviour so existing
-    # schedules are unchanged.
-    channel_heap = [(0.0, c) for c in range(channels)]
-    heapq.heapify(channel_heap)
-
-    # Greedy pass: walk the steps in declared order, and drop each on the
-    # earliest-available channel. Since `steps` is already a valid
-    # topological order (the validator enforces this upstream), a single
-    # left-to-right pass suffices - no need to repeatedly rescan for
-    # newly-ready steps.
-    for step in steps:
+    for step in ordered_steps:
         dep_end = 0.0
         for dep in step.depends_on:
-            if dep in finished_end:
-                dep_end = max(dep_end, finished_end[dep])
+            dep_end = max(dep_end, finished_end[dep])
 
-        free_at, channel_idx = heapq.heappop(channel_heap)
-        start = max(dep_end, free_at)
+        # Pick the channel that gives the earliest actual start time; among
+        # channels tied on that start time, prefer the busiest one (largest
+        # free_at) so the idlest channel stays available for later work.
+        channel_idx = min(
+            range(channels),
+            key=lambda c: (max(dep_end, channel_free_at[c]), -channel_free_at[c]),
+        )
+        start = max(dep_end, channel_free_at[channel_idx])
         end = start + step.estimated_seconds
-        heapq.heappush(channel_heap, (end, channel_idx))
+        channel_free_at[channel_idx] = end
 
         finished_end[step.order] = end
         placed[step.order] = ChannelScheduledStep(
@@ -165,32 +222,37 @@ def schedule_with_channels(program: CommissioningProgram, channels: int) -> Chan
     return ChannelScheduleResult(
         channels=channels,
         cycle_time_seconds=round(cycle_time, 1),
-        schedule=[placed[s.order] for s in steps],
+        schedule=[placed[s.order] for s in sorted(steps, key=lambda s: s.order)],
     )
 
 
-def _cycle_time_for_channels(steps: list, channels: int) -> float:
+def _cycle_time_for_channels(ordered_steps: list[CommissioningStep], channels: int) -> float:
     """Cycle time alone for a given channel count, skipping per-step objects.
 
     Same greedy algorithm as ``schedule_with_channels``, but it does not
     build a ``ChannelScheduledStep`` for every step. The sweep below only
     ever reads the cycle time, and constructing (and validating) one Pydantic
     model per step per channel count dominated the sweep's cost.
+
+    ``ordered_steps`` must already be in a valid topological order (callers
+    compute it once via ``_topological_order`` and reuse it for every
+    channel count in the sweep).
     """
     finished_end: dict[int, float] = {}
-    channel_heap = [(0.0, c) for c in range(channels)]
-    heapq.heapify(channel_heap)
+    channel_free_at = [0.0] * channels
     makespan = 0.0
 
-    for step in steps:
+    for step in ordered_steps:
         dep_end = 0.0
         for dep in step.depends_on:
-            if dep in finished_end:
-                dep_end = max(dep_end, finished_end[dep])
+            dep_end = max(dep_end, finished_end[dep])
 
-        free_at, channel_idx = heapq.heappop(channel_heap)
-        end = max(dep_end, free_at) + step.estimated_seconds
-        heapq.heappush(channel_heap, (end, channel_idx))
+        channel_idx = min(
+            range(channels),
+            key=lambda c: (max(dep_end, channel_free_at[c]), -channel_free_at[c]),
+        )
+        end = max(dep_end, channel_free_at[channel_idx]) + step.estimated_seconds
+        channel_free_at[channel_idx] = end
 
         finished_end[step.order] = end
         if end > makespan:
@@ -206,11 +268,14 @@ def channel_sweep(program: CommissioningProgram, max_channels: int) -> ChannelSw
     of channels, adding more stops helping because the critical path (not
     channel contention) becomes the bottleneck - the same ceiling
     ``compute_optimization`` computes for unlimited channels.
+
+    Raises ``ValueError`` if ``max_channels < 1`` or the dependency graph is
+    not a DAG.
     """
     if max_channels < 1:
         raise ValueError(f"max_channels must be >= 1, got {max_channels}.")
 
-    steps = sorted(program.steps, key=lambda s: s.order)
+    steps = program.steps
     if not steps:
         return ChannelSweepResult(
             points=[
@@ -218,6 +283,8 @@ def channel_sweep(program: CommissioningProgram, max_channels: int) -> ChannelSw
                 for n in range(1, max_channels + 1)
             ]
         )
+
+    ordered_steps = _topological_order(steps)
 
     # The critical path is a hard floor on cycle time: no number of channels
     # can beat it. Once the sweep reaches that floor, every remaining point
@@ -227,7 +294,7 @@ def channel_sweep(program: CommissioningProgram, max_channels: int) -> ChannelSw
 
     points: list[ChannelSweepPoint] = []
     for n in range(1, max_channels + 1):
-        cycle = round(_cycle_time_for_channels(steps, n), 1)
+        cycle = round(_cycle_time_for_channels(ordered_steps, n), 1)
         points.append(ChannelSweepPoint(channels=n, cycle_time_seconds=cycle))
         if cycle <= floor:
             points.extend(

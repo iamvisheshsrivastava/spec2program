@@ -124,18 +124,24 @@ class StepType(str, Enum):
 class CommissioningStep(BaseModel):
     """One ordered action in a commissioning program."""
 
+    # Extra guards against an attacker- or model-fabricated program (see
+    # issue #24, mirroring the bounds already applied to VehicleSpec/Ecu in
+    # issue #13): generous for any real commissioning program, but enough to
+    # stop a single client-supplied step from carrying oversized data into
+    # validation, the scheduler, or an exported document.
     order: int = Field(..., description="1-based position of the step.")
     step_type: StepType = Field(..., description="What kind of action this is.")
-    ecu_id: str = Field(..., description="Which ECU this step targets.")
-    description: str = Field(..., description="Human-readable summary of the step.")
+    ecu_id: str = Field(..., max_length=64, description="Which ECU this step targets.")
+    description: str = Field(..., max_length=1000, description="Human-readable summary of the step.")
     uds_service: str | None = Field(
-        None, description="UDS service ID used, if applicable, e.g. '0x2E'."
+        None, max_length=16, description="UDS service ID used, if applicable, e.g. '0x2E'."
     )
     estimated_seconds: float = Field(
-        0.0, description="Estimated cycle time contribution of this step."
+        0.0, ge=0.0, le=86400.0, description="Estimated cycle time contribution of this step."
     )
     depends_on: list[int] = Field(
         default_factory=list,
+        max_length=1000,
         description="Orders of steps that must complete before this one.",
     )
 
@@ -143,12 +149,12 @@ class CommissioningStep(BaseModel):
 class CommissioningProgram(BaseModel):
     """The full generated program for a single vehicle."""
 
-    vehicle_id: str = Field(..., description="Vehicle this program is for.")
+    vehicle_id: str = Field(..., max_length=100, description="Vehicle this program is for.")
     steps: list[CommissioningStep] = Field(
-        default_factory=list, description="Ordered commissioning steps."
+        default_factory=list, max_length=2000, description="Ordered commissioning steps."
     )
     notes: str | None = Field(
-        None, description="Optional free-text notes / rationale from the generator."
+        None, max_length=10000, description="Optional free-text notes / rationale from the generator."
     )
 
 

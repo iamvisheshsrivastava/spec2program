@@ -33,6 +33,7 @@ from .models import (
     GenerateResponse,
     VehicleSpec,
 )
+from .models import OptimizationResult, ValidationIssue
 from .scheduler import compute_optimization
 from .validator import is_valid, validate_program
 
@@ -137,7 +138,27 @@ def run_pipeline(
         program.notes = f"{program.notes} {durations_note}" if program.notes else durations_note
 
     analytics = analyse_program(spec, program)
-    optimization = compute_optimization(program)
+    try:
+        optimization = compute_optimization(program)
+    except ValueError as exc:
+        # Issue #7: a program whose `depends_on` graph is not a DAG (a
+        # forward/cyclic reference) must not be scored as if it were valid -
+        # that silently produced a too-low critical path and a too-high
+        # speedup_factor. Surface it as an explicit validation error instead
+        # of a 500, and report a zeroed-out optimization rather than a
+        # plausible-looking but meaningless number.
+        logger.warning("Dependency graph for '%s' is not a DAG: %s", spec.vehicle_id, exc)
+        issues = [*issues, ValidationIssue(
+            severity="error",
+            message=f"Program's step dependency graph is invalid and could not be scheduled: {exc}",
+        )]
+        optimization = OptimizationResult(
+            sequential_seconds=round(sum(s.estimated_seconds for s in program.steps), 1),
+            critical_path_seconds=0.0,
+            speedup_factor=1.0,
+            critical_path_steps=[],
+            schedule=[],
+        )
 
     return GenerateResponse(
         program=program,

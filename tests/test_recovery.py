@@ -100,6 +100,58 @@ def test_recovery_step_numbering_continues_after_program(simple_spec):
     assert all(s.order > len(program.steps) for s in response.recovery_steps)
 
 
+def test_empty_recovery_is_reported_as_invalid_not_vacuously_valid(simple_spec):
+    """Issue #9 regression: the failed step's ECU is not in the spec at all,
+    so the mock policy has nothing to recover onto. This must come back as
+    an explicit failure (is_valid False, an error-severity issue), never as
+    a green 'recovery passed' response with an empty steps list.
+    """
+    from backend.models import CommissioningProgram, CommissioningStep, StepType
+
+    program = CommissioningProgram(
+        vehicle_id=simple_spec.vehicle_id,
+        steps=[
+            CommissioningStep(order=1, step_type=StepType.FLASH_SOFTWARE,
+                               ecu_id="GHOST", description="Flash ghost ecu",
+                               uds_service="0x34", estimated_seconds=10.0, depends_on=[]),
+        ],
+    )
+    request = RecoveryRequest(
+        spec=simple_spec, program=program, failed_step_order=1,
+        failure_reason="communication timeout",
+    )
+    response = generate_recovery(request)
+
+    assert response.recovery_steps == []
+    assert response.is_valid is False
+    assert any(issue.severity == "error" for issue in response.validation)
+
+
+def test_llm_returning_zero_steps_falls_back_to_mock_policy(simple_spec, monkeypatch):
+    """Issue #9 regression: a model that returns {"steps": []} must not be
+    treated as a successful, empty recovery - it should get the same
+    fallback-to-mock-policy treatment as an LLM call that raised.
+    """
+    from backend import recovery as recovery_module
+
+    program = _program_dict(simple_spec.vehicle_id)
+
+    def _empty_llm(*args, **kwargs):
+        return {"steps": [], "notes": "nothing to report"}, "fake-llm"
+
+    monkeypatch.setattr(recovery_module, "generate_recovery_program", _empty_llm)
+
+    request = RecoveryRequest(
+        spec=simple_spec, program=program, failed_step_order=3,
+        failure_reason="communication timeout",
+    )
+    response = generate_recovery(request)
+
+    assert response.provider == "mock-fallback"
+    assert response.recovery_steps  # the deterministic policy actually ran
+    assert response.is_valid is True
+
+
 def test_recovery_step_numbering_does_not_collide_with_gapped_orders(simple_spec):
     """Regression test: order used to be based on len(steps), which collides
     with an existing step's order whenever the program has gaps (e.g. after a

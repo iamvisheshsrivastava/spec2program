@@ -25,6 +25,7 @@ from .models import (
     RecoveryRequest,
     RecoveryResponse,
     StepType,
+    ValidationIssue,
     VehicleSpec,
 )
 from .validator import check_notes_for_unverified_claims, is_valid, validate_recovery_steps
@@ -54,10 +55,18 @@ def _mock_recovery(
     """
     ecu = next((e for e in spec.ecus if e.ecu_id == failed_step.ecu_id), None)
     if ecu is None:
-        # Nothing sensible to recover onto - return no steps; the caller's
-        # validator will flag the original failed_step reference separately
-        # if needed. This keeps the mock policy honest rather than guessing.
-        return []
+        # Nothing sensible to recover onto. Previously this returned an
+        # empty list silently (issue #9): zero recovery steps meant zero
+        # issues from validate_recovery_steps(), and is_valid([]) is
+        # vacuously True - a green "recovery passed" response for a fix
+        # that was never generated. generate_recovery() below now also
+        # treats an empty recovery_steps list as a hard error regardless of
+        # cause, but this keeps the mock policy's own reasoning honest: the
+        # ECU/spec mismatch is itself a finding, not a no-op.
+        raise ValueError(
+            f"Failed step {failed_step.order} targets ECU '{failed_step.ecu_id}', "
+            f"which is not in the vehicle specification - no recovery can be planned."
+        )
 
     supports = set(ecu.supported_uds_services)
     reason = failure_reason.lower()
@@ -124,19 +133,48 @@ def generate_recovery(request: RecoveryRequest) -> RecoveryResponse:
             spec, program, failed_step, request.failure_reason
         )
         recovery_steps = [CommissioningStep.model_validate(s) for s in raw.get("steps", [])]
+        if not recovery_steps:
+            # Issue #9: a model that returns {"steps": []} (or omits "steps")
+            # does not raise, so this used to skip the mock fallback entirely
+            # and return an empty-but-"valid" response. Treat it the same as
+            # any other provider failure so the deterministic policy gets a
+            # real chance to produce something.
+            raise ValueError(f"'{provider_name}' provider returned zero recovery steps.")
         notes = raw.get("notes")
     except Exception as exc:  # noqa: BLE001 - any failure falls back the same way
         logger.warning("Recovery generation failed, falling back to mock policy: %s", exc)
-        recovery_steps = _mock_recovery(spec, program, failed_step, request.failure_reason)
-        provider_name = "mock-fallback"
-        notes = (
-            f"Fell back to the deterministic recovery policy because the LLM call failed "
-            f"({exc.__class__.__name__}: {exc})."
-        )
+        try:
+            recovery_steps = _mock_recovery(spec, program, failed_step, request.failure_reason)
+        except ValueError as mock_exc:
+            # The deterministic policy also had nothing sensible to do (e.g.
+            # the failed step's ECU is not in the spec at all). Surface that
+            # as the finding it is rather than silently producing no steps.
+            recovery_steps = []
+            notes = str(mock_exc)
+            provider_name = "mock-fallback"
+        else:
+            provider_name = "mock-fallback"
+            notes = (
+                f"Fell back to the deterministic recovery policy because the LLM call failed "
+                f"({exc.__class__.__name__}: {exc})."
+            )
 
     issues = validate_recovery_steps(
         spec, recovery_steps, already_unlocked=unlocked, already_seen_orders=seen
     )
+    if not recovery_steps:
+        # Issue #9: zero recovery steps means validate_recovery_steps() ran
+        # zero iterations and found zero issues, and is_valid([]) is
+        # vacuously True - a "passed validation" response for a fix that
+        # does not exist. An empty recovery is always a failure to report,
+        # never a silent pass.
+        issues.append(ValidationIssue(
+            severity="error",
+            message=(
+                "No corrective recovery steps could be generated for this failure. "
+                "This is not a validated recovery - treat it as recovery failing, not succeeding."
+            ),
+        ))
     issues.extend(check_notes_for_unverified_claims(notes))
 
     return RecoveryResponse(
