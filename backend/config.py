@@ -61,6 +61,17 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed CORS origins ("*" allows all).
     cors_origins: str = "*"
 
+    # Per-IP rate limit (slowapi / limits syntax, e.g. "20/minute") applied
+    # to the endpoints that spend LLM credits (/api/generate, /api/batch,
+    # /api/recover) - see issue #12. The public demo has no auth, so this is
+    # the only thing standing between an anonymous caller and an unbounded
+    # number of LLM calls against a real API key.
+    rate_limit_llm_endpoints: str = "20/minute"
+
+    # Where the SQLite persistence database lives (issue #16). Relative
+    # paths are resolved against the project root at import time.
+    database_path: str = "data/spec2program.db"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

@@ -30,6 +30,8 @@ data/_server_out.txt
 data/_server_err.txt
 data/_*.json
 data/_*.xml
+data/*.db
+data/*.db-journal
 
 # ---- Editor / OS ----
 .vscode/

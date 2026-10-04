@@ -354,3 +354,34 @@ class BatchResponse(BaseModel):
 
     results: list[GenerateResponse]
     aggregate: BatchAggregate
+
+
+# ---------------------------------------------------------------------------
+# Diff / compare (issue #20)
+# ---------------------------------------------------------------------------
+class CompareRequest(BaseModel):
+    """Request body for POST /api/compare: two programs to diff by step order."""
+
+    program_a: CommissioningProgram
+    program_b: CommissioningProgram
+
+
+# ---------------------------------------------------------------------------
+# History / persistence (issue #16)
+# ---------------------------------------------------------------------------
+class HistoryItem(BaseModel):
+    """One row of the audit history, without the full request/response payload."""
+
+    id: int
+    created_at: str
+    kind: str
+    vehicle_id: str | None = None
+    provider: str | None = None
+    is_valid: bool | None = None
+
+
+class HistoryItemDetail(HistoryItem):
+    """A single history row, including its full stored request/response payload."""
+
+    request: dict
+    response: dict

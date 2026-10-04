@@ -14,14 +14,20 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
+from . import db
 from .batch import run_batch
 from .config import settings
+from .diff import diff_programs
 from .duration_model import model_info as duration_model_info
+from .export_csv import to_csv
 from .generator import generate
 from .llm_service import close_http_client
 from .models import (
@@ -31,8 +37,10 @@ from .models import (
     ChannelScheduleResult,
     ChannelSweepRequest,
     ChannelSweepResult,
+    CompareRequest,
     GenerateRequest,
     GenerateResponse,
+    HistoryItemDetail,
     OtxExportRequest,
     RecoveryRequest,
     RecoveryResponse,
@@ -42,6 +50,11 @@ from .otx_export import to_otx_xml
 from .recovery import generate_recovery
 from .scheduler import channel_sweep, schedule_with_channels
 from .validator import is_valid, validate_program
+
+# Per-IP rate limiting on the endpoints that spend LLM credits (issue #12).
+# The public demo has no auth, so this is the only backstop against an
+# anonymous caller draining a real API key with a burst of requests.
+limiter = Limiter(key_func=get_remote_address)
 
 # Resolve project paths relative to this file so the app works regardless of
 # the current working directory (important inside Docker and on PaaS hosts).
@@ -98,6 +111,9 @@ app = FastAPI(
     version="0.1.0",
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Allow the frontend (and any configured origins) to call the API.
 app.add_middleware(
     CORSMiddleware,
@@ -106,6 +122,24 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _persist_history(
+    *, kind: str, vehicle_id: str | None, provider: str | None,
+    is_valid_: bool | None, request_model, response_model,
+) -> None:
+    """Best-effort audit write (issue #16). Never let a DB problem fail the API call."""
+    try:
+        db.record_history(
+            kind=kind,
+            vehicle_id=vehicle_id,
+            provider=provider,
+            is_valid=is_valid_,
+            request_json=request_model.model_dump_json(),
+            response_json=response_model.model_dump_json(),
+        )
+    except Exception as exc:  # noqa: BLE001 - persistence must never break the response
+        logger.warning("Failed to persist history row (kind=%s): %s", kind, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -156,10 +190,17 @@ def get_sample(filename: str) -> VehicleSpec:
 
 
 @app.post("/api/generate", response_model=GenerateResponse)
-def generate_program(request: GenerateRequest) -> GenerateResponse:
-    """Generate, validate, and analyse a commissioning program for a spec."""
+@limiter.limit(lambda: settings.rate_limit_llm_endpoints)
+def generate_program(request: Request, payload: GenerateRequest) -> GenerateResponse:
+    """Generate, validate, and analyse a commissioning program for a spec.
+
+    The parameter is named ``request`` (the Starlette request, required by
+    @limiter.limit for per-IP rate limiting - issue #12) with the request
+    *body* as ``payload``; FastAPI tells them apart by type, same as any
+    other dependency.
+    """
     try:
-        return generate(request.spec)
+        result = generate(payload.spec)
     except (json.JSONDecodeError, ValueError) as exc:
         # The generator returned something that could not be parsed/validated.
         raise HTTPException(
@@ -168,17 +209,29 @@ def generate_program(request: GenerateRequest) -> GenerateResponse:
         ) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise _internal_error(exc) from exc
+    _persist_history(
+        kind="generate", vehicle_id=payload.spec.vehicle_id, provider=result.provider,
+        is_valid_=result.is_valid, request_model=payload, response_model=result,
+    )
+    return result
 
 
 @app.post("/api/batch", response_model=BatchResponse)
-def generate_batch(request: BatchRequest) -> BatchResponse:
+@limiter.limit(lambda: settings.rate_limit_llm_endpoints)
+def generate_batch(request: Request, payload: BatchRequest) -> BatchResponse:
     """Run the pipeline for every spec in the batch and return a fleet rollup."""
-    if not request.specs:
+    if not payload.specs:
         raise HTTPException(status_code=400, detail="Batch request contained no specs.")
     try:
-        return run_batch(request.specs)
+        result = run_batch(payload.specs)
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise _internal_error(exc) from exc
+    for spec, item in zip(payload.specs, result.results):
+        _persist_history(
+            kind="batch_item", vehicle_id=spec.vehicle_id, provider=item.provider,
+            is_valid_=item.is_valid, request_model=spec, response_model=item,
+        )
+    return result
 
 
 @app.post("/api/optimize/channels", response_model=ChannelScheduleResult)
@@ -200,10 +253,11 @@ def optimize_channel_sweep(request: ChannelSweepRequest) -> ChannelSweepResult:
 
 
 @app.post("/api/recover", response_model=RecoveryResponse)
-def recover(request: RecoveryRequest) -> RecoveryResponse:
+@limiter.limit(lambda: settings.rate_limit_llm_endpoints)
+def recover(request: Request, payload: RecoveryRequest) -> RecoveryResponse:
     """Generate a corrective sub-program for a step that failed at runtime."""
     try:
-        return generate_recovery(request)
+        result = generate_recovery(payload)
     except ValueError as exc:
         # generate_recovery() raises ValueError for bad client input (e.g. a
         # failed_step_order that does not exist in the given program) - a 400,
@@ -212,6 +266,11 @@ def recover(request: RecoveryRequest) -> RecoveryResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 - surface upstream errors cleanly
         raise _internal_error(exc) from exc
+    _persist_history(
+        kind="recover", vehicle_id=payload.spec.vehicle_id, provider=result.provider,
+        is_valid_=result.is_valid, request_model=payload, response_model=result,
+    )
+    return result
 
 
 @app.post("/api/export/otx")
@@ -248,6 +307,76 @@ def export_otx(request: OtxExportRequest) -> Response:
             "Content-Disposition": f'attachment; filename="{safe_vehicle_id}_otx.xml"'
         },
     )
+
+
+@app.post("/api/export/csv")
+def export_csv(request: OtxExportRequest) -> Response:
+    """Export a generated program as a human-readable work-instruction CSV (issue #19).
+
+    Same validation gate as ``/api/export/otx``: the program must pass
+    ``validate_program`` against the given spec before it can be exported,
+    so a client-fabricated program can't be handed out as if it were a real
+    pipeline result.
+    """
+    spec, program = request.spec, request.program
+    issues = validate_program(spec, program)
+    if not is_valid(issues):
+        messages = "; ".join(issue.message for issue in issues if issue.severity == "error")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Program failed validation against the given spec and cannot be exported: {messages}",
+        )
+    csv_text = to_csv(program)
+    safe_vehicle_id = _safe_filename_component(program.vehicle_id)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_vehicle_id}_work_instructions.csv"'
+        },
+    )
+
+
+@app.post("/api/compare")
+def compare_programs(request: CompareRequest) -> dict:
+    """Diff two commissioning programs by step order (issue #20).
+
+    Unlike the export routes, comparison does not require either program to
+    validate against a spec - a diff is useful precisely when one of the two
+    is broken (e.g. comparing a first LLM attempt against the self-repaired
+    result), and no spec is even supplied here.
+    """
+    return diff_programs(request.program_a, request.program_b)
+
+
+@app.get("/api/history")
+def get_history(
+    kind: str | None = None, vehicle_id: str | None = None, limit: int = 50, offset: int = 0,
+) -> list[dict]:
+    """List audit-history rows (issue #16), newest first.
+
+    ``kind`` filters to 'generate', 'batch_item', or 'recover'. Returns the
+    summary fields only; fetch a single id via ``/api/history/{id}`` for the
+    full stored request/response payload.
+    """
+    if kind is not None and kind not in ("generate", "batch_item", "recover"):
+        raise HTTPException(status_code=400, detail="kind must be one of 'generate', 'batch_item', 'recover'.")
+    try:
+        return db.list_history(kind=kind, vehicle_id=vehicle_id, limit=limit, offset=offset)
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error(exc) from exc
+
+
+@app.get("/api/history/{item_id}", response_model=HistoryItemDetail)
+def get_history_item(item_id: int) -> HistoryItemDetail:
+    """Return one audit-history row, including its full request/response payload."""
+    try:
+        record = db.get_history_item(item_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _internal_error(exc) from exc
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"No history item with id {item_id}.")
+    return HistoryItemDetail.model_validate(record)
 
 
 # ---------------------------------------------------------------------------
