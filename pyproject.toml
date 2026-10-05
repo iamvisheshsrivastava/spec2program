@@ -1,0 +1,28 @@
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [".venv", ".claude"]
+
+[tool.ruff.lint]
+# Keep the CI lint gate meaningful without relitigating this codebase's
+# existing style choices: pyflakes (F) + pycodestyle errors (E) + unsorted
+# imports (I) catch real bugs (unused imports/names, undefined names,
+# syntax-adjacent issues) cheaply. Broader "modernize this" rule families
+# (SIM, RUF, PLR, ...) are left off by default rather than enabled and then
+# blanket-ignored.
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # line length is handled by `line-length` + formatter, not a hard error here
+]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+ignore_missing_imports = true
+# Opt-in, not strict: this project uses pydantic models and dict-shaped LLM
+# responses pervasively. A strict gate would need a much larger annotation
+# pass than this CI change is meant to be; the goal here is catching clear
+# type errors (undefined names, wrong arg counts, etc.), not full coverage.
+check_untyped_defs = true
+warn_redundant_casts = true
+exclude = ["\\.venv/", "tests/", "scripts/"]

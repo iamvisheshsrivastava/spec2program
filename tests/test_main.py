@@ -110,6 +110,7 @@ def test_recover_returns_400_for_unknown_failed_step_order(simple_spec):
 
 def test_batch_rejects_oversized_request():
     from fastapi.testclient import TestClient
+
     from backend.main import app
 
     resp = TestClient(app).post("/api/batch", json={"specs": [{}] * 26})
@@ -118,6 +119,7 @@ def test_batch_rejects_oversized_request():
 
 def test_generate_500_hides_upstream_error(monkeypatch):
     from fastapi.testclient import TestClient
+
     from backend import main
 
     def boom(_spec):

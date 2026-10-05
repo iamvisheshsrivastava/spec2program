@@ -40,7 +40,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from backend.duration_model import STEP_TYPES, build_features, MODEL_PATH  # noqa: E402
+from backend.duration_model import MODEL_PATH, STEP_TYPES, build_features  # noqa: E402
 
 # Base duration (seconds) and noise std-dev per step type - stand-in for what
 # would, in reality, be summary statistics pulled from historical run logs.

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from .llm_service import MockProvider, generate_recovery_program
+from .llm_service import generate_recovery_program
 from .models import (
     CommissioningProgram,
     CommissioningStep,

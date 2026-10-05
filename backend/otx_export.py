@@ -20,8 +20,8 @@ runtime would need to sequence execution correctly.
 
 from __future__ import annotations
 
-from xml.etree.ElementTree import Element, SubElement, tostring
 from xml.dom import minidom
+from xml.etree.ElementTree import Element, SubElement, tostring
 
 from .models import CommissioningProgram
 

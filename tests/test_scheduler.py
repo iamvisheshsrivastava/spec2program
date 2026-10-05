@@ -67,7 +67,6 @@ def test_forward_dependency_raises_instead_of_being_dropped():
     silently skipped - it must be honoured via topological sort, or the
     cycle it creates must raise loudly.
     """
-    import pytest
 
     program = CommissioningProgram(
         vehicle_id="V1",

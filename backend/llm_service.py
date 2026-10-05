@@ -593,7 +593,10 @@ def get_provider() -> LLMProvider:
         return OpenRouterProvider()
     if settings.llm_provider == "openai" and settings.llm_api_key:
         return OpenAIProvider()
-    return MockProvider()
+    # MockProvider deliberately has no repair_program: it never produces an
+    # invalid program, so there is nothing to repair. generator.py already
+    # checks hasattr(provider, "repair_program") before calling it.
+    return MockProvider()  # type: ignore[return-value]
 
 
 # ---------------------------------------------------------------------------

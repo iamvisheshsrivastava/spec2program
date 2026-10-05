@@ -155,6 +155,11 @@ def _predict_cached(step_type: str, flash_size_proxy: float) -> float:
     file changes (see ``_load_model``).
     """
     model = _cached_model
+    if model is None:
+        # Callers only reach this through predict_seconds(), which already
+        # checks is_available() first - but keep this function honest about
+        # its own precondition rather than relying on that external check.
+        raise RuntimeError("_predict_cached() called with no duration model loaded.")
     feature_spec = model.get("feature_spec", DEFAULT_FEATURE_SPEC)
     x = np.asarray(build_features(step_type, flash_size_proxy, feature_spec), dtype=float)
     predicted = float(np.dot(model["_weights_array"], x))

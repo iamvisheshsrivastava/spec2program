@@ -13,6 +13,8 @@ output blindly, we verify it.
 
 from __future__ import annotations
 
+from collections.abc import Set as AbstractSet
+
 from .models import (
     CommissioningProgram,
     StepType,
@@ -204,8 +206,8 @@ def validate_recovery_steps(
     spec: VehicleSpec,
     steps: list,
     *,
-    already_unlocked: set[str] = frozenset(),
-    already_seen_orders: set[int] = frozenset(),
+    already_unlocked: AbstractSet[str] = frozenset(),
+    already_seen_orders: AbstractSet[int] = frozenset(),
 ) -> list[ValidationIssue]:
     """Validate a short corrective sub-program against the spec.
 

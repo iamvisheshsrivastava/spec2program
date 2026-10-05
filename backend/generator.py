@@ -31,9 +31,10 @@ from .llm_service import LLMProvider, MockProvider, get_provider
 from .models import (
     CommissioningProgram,
     GenerateResponse,
+    OptimizationResult,
+    ValidationIssue,
     VehicleSpec,
 )
-from .models import OptimizationResult, ValidationIssue
 from .scheduler import compute_optimization
 from .validator import is_valid, validate_program
 
