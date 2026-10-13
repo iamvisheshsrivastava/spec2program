@@ -77,20 +77,42 @@ def _resolve_db_path() -> Path:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
+    """Apply any pending migrations, each as a single all-or-nothing step.
+
+    Issue #28: Python's ``sqlite3`` module autocommits DDL statements (there
+    is no implicit ``BEGIN`` before ``CREATE TABLE``/``CREATE INDEX`` the way
+    there is for INSERT/UPDATE/DELETE), so running a migration's statements
+    with plain ``conn.execute(...)`` calls and only committing at the very
+    end meant a migration that failed partway through left its earlier DDL
+    already applied to disk while ``schema_version`` stayed unbumped - a
+    crash-unsafe partial state that would be retried (and fail again, e.g.
+    on a non-idempotent statement) on every subsequent startup.
+    Explicitly opening a transaction with ``BEGIN`` before each migration's
+    statements makes SQLite treat the whole migration (DDL included) as one
+    unit: either every statement plus the ``schema_version`` bump commits
+    together, or a failure rolls all of it back, leaving the database
+    exactly as it was before that migration was attempted.
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)"
     )
+    conn.commit()
     row = conn.execute("SELECT version FROM schema_version").fetchone()
     current = row[0] if row else 0
     for version, statements in enumerate(_MIGRATIONS[current:], start=current + 1):
-        for statement in statements:
-            conn.execute(statement)
-        if row:
-            conn.execute("UPDATE schema_version SET version = ?", (version,))
-        else:
-            conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
-            row = (version,)  # subsequent iterations update instead of insert
-    conn.commit()
+        try:
+            conn.execute("BEGIN")
+            for statement in statements:
+                conn.execute(statement)
+            if row:
+                conn.execute("UPDATE schema_version SET version = ?", (version,))
+            else:
+                conn.execute("INSERT INTO schema_version (version) VALUES (?)", (version,))
+                row = (version,)  # subsequent iterations update instead of insert
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def get_connection() -> sqlite3.Connection:

@@ -24,6 +24,7 @@ from slowapi.util import get_remote_address
 
 from . import db
 from .batch import run_batch
+from .batch import shutdown_executor as shutdown_batch_executor
 from .config import settings
 from .diff import diff_programs
 from .duration_model import model_info as duration_model_info
@@ -98,6 +99,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle: release pooled LLM connections on shutdown."""
     yield
     close_http_client()
+    shutdown_batch_executor()
 
 
 app = FastAPI(

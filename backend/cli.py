@@ -28,6 +28,8 @@ import json
 import sys
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from .batch import run_batch
 from .diff import diff_programs
 from .export_csv import to_csv
@@ -35,6 +37,21 @@ from .generator import generate
 from .models import CommissioningProgram, VehicleSpec
 from .otx_export import to_otx_xml
 from .validator import is_valid, validate_program
+
+# Issue #27: file loading (a missing/unreadable path, malformed JSON, or a
+# file that doesn't match the expected VehicleSpec/CommissioningProgram
+# shape) previously raised straight out of these helpers as an uncaught
+# traceback. Every ``cmd_*`` function now catches this set around its
+# loading step and prints a clean "error: ..." message plus a non-zero exit
+# code instead, matching the pattern the export subcommands already use for
+# validation failures.
+_LOAD_ERRORS = (OSError, json.JSONDecodeError, ValidationError)
+
+
+def _describe_load_error(exc: Exception) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return f"file not found: {exc.filename}"
+    return str(exc)
 
 
 def _read_json(path: str) -> dict:
@@ -59,26 +76,45 @@ def _load_program(path: str) -> CommissioningProgram:
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
-    spec = VehicleSpec.model_validate(_read_json(args.spec))
-    result = generate(spec)
+    try:
+        spec = VehicleSpec.model_validate(_read_json(args.spec))
+        result = generate(spec)
+    except _LOAD_ERRORS as exc:
+        print(f"error: {_describe_load_error(exc)}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - surface pipeline failures cleanly
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     _write_output(result.model_dump_json(indent=2), args.output)
     return 0 if result.is_valid else 1
 
 
 def cmd_batch(args: argparse.Namespace) -> int:
-    raw_specs = _read_json(args.specs)
-    if not isinstance(raw_specs, list):
-        print("error: specs file must contain a JSON array of VehicleSpec objects", file=sys.stderr)
+    try:
+        raw_specs = _read_json(args.specs)
+        if not isinstance(raw_specs, list):
+            print("error: specs file must contain a JSON array of VehicleSpec objects", file=sys.stderr)
+            return 2
+        specs = [VehicleSpec.model_validate(s) for s in raw_specs]
+    except _LOAD_ERRORS as exc:
+        print(f"error: {_describe_load_error(exc)}", file=sys.stderr)
         return 2
-    specs = [VehicleSpec.model_validate(s) for s in raw_specs]
-    result = run_batch(specs)
+    try:
+        result = run_batch(specs)
+    except Exception as exc:  # noqa: BLE001 - surface pipeline failures cleanly
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     _write_output(result.model_dump_json(indent=2), args.output)
     return 0 if result.aggregate.valid_count == result.aggregate.vehicles else 1
 
 
 def cmd_export_otx(args: argparse.Namespace) -> int:
-    program = _load_program(args.program)
-    spec = VehicleSpec.model_validate(_read_json(args.spec))
+    try:
+        program = _load_program(args.program)
+        spec = VehicleSpec.model_validate(_read_json(args.spec))
+    except _LOAD_ERRORS as exc:
+        print(f"error: {_describe_load_error(exc)}", file=sys.stderr)
+        return 2
     issues = validate_program(spec, program)
     if not is_valid(issues):
         for issue in issues:
@@ -90,8 +126,12 @@ def cmd_export_otx(args: argparse.Namespace) -> int:
 
 
 def cmd_export_csv(args: argparse.Namespace) -> int:
-    program = _load_program(args.program)
-    spec = VehicleSpec.model_validate(_read_json(args.spec))
+    try:
+        program = _load_program(args.program)
+        spec = VehicleSpec.model_validate(_read_json(args.spec))
+    except _LOAD_ERRORS as exc:
+        print(f"error: {_describe_load_error(exc)}", file=sys.stderr)
+        return 2
     issues = validate_program(spec, program)
     if not is_valid(issues):
         for issue in issues:
@@ -103,8 +143,12 @@ def cmd_export_csv(args: argparse.Namespace) -> int:
 
 
 def cmd_compare(args: argparse.Namespace) -> int:
-    program_a = _load_program(args.program_a)
-    program_b = _load_program(args.program_b)
+    try:
+        program_a = _load_program(args.program_a)
+        program_b = _load_program(args.program_b)
+    except _LOAD_ERRORS as exc:
+        print(f"error: {_describe_load_error(exc)}", file=sys.stderr)
+        return 2
     result = diff_programs(program_a, program_b)
     _write_output(json.dumps(result, indent=2), args.output)
     return 0
