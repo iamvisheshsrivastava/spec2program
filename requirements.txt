@@ -10,7 +10,7 @@ pydantic-settings==2.14.2
 httpx==0.28.1
 
 # Learned step-duration model (closed-form linear regression, no ML framework needed)
-numpy==2.5.1
+numpy==2.5.4
 
 # Per-IP rate limiting on the endpoints that spend LLM credits (issue #12)
 slowapi==0.1.10
