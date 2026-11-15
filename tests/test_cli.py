@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from backend import cli
 from backend.config import settings
 
@@ -71,3 +73,20 @@ def test_cli_compare_two_programs(tmp_path, simple_spec, monkeypatch):
     assert rc == 0
     diff = json.loads((tmp_path / "diff.json").read_text(encoding="utf-8"))
     assert "added" in diff and "removed" in diff and "modified" in diff
+
+
+def test_cli_version_flag_prints_backend_version_and_exits_zero(capsys):
+    from backend import __version__
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+
+    assert exc_info.value.code == 0
+    assert __version__ in capsys.readouterr().out
+
+
+def test_cli_version_flag_does_not_require_a_subcommand(capsys):
+    """--version must short-circuit before the subparsers' required check (#31)."""
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["--version"])
+    assert exc_info.value.code == 0
