@@ -37,6 +37,7 @@ from .generator import generate
 from .models import CommissioningProgram, VehicleSpec
 from .otx_export import to_otx_xml
 from .validator import is_valid, validate_program
+from . import __version__
 
 # Issue #27: file loading (a missing/unreadable path, malformed JSON, or a
 # file that doesn't match the expected VehicleSpec/CommissioningProgram
@@ -158,6 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m backend.cli",
         description="Local, offline batch generation and export for spec2program - no server needed.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show the backend package version and exit.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
