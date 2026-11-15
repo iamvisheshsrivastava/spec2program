@@ -132,3 +132,11 @@ def test_generate_500_hides_upstream_error(monkeypatch):
     resp = client.post("/api/generate", json=body)
     assert resp.status_code == 500
     assert "secret.upstream" not in resp.text
+
+
+def test_health_reports_app_version():
+    import backend
+
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    assert resp.json()["version"] == backend.__version__

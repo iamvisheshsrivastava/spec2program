@@ -22,7 +22,7 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from . import db
+from . import __version__, db
 from .batch import run_batch
 from .batch import shutdown_executor as shutdown_batch_executor
 from .config import settings
@@ -110,7 +110,7 @@ app = FastAPI(
         "structured specifications (BOM, configuration, UDS diagnostics, "
         "software versions, process standards)."
     ),
-    version="0.1.0",
+    version=__version__,
 )
 
 app.state.limiter = limiter
@@ -157,6 +157,7 @@ def health() -> dict:
         provider, model = "mock", None
     return {
         "status": "ok",
+        "version": __version__,
         "provider": provider,
         "model": model,
         "duration_model": duration_model_info(),
