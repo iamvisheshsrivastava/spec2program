@@ -1,7 +1,7 @@
 -r requirements.txt
 
 # Testing
-pytest==9.1.1
+pytest==9.2.0
 
 # Lint / type-check (issue #11)
 ruff==0.16.10
