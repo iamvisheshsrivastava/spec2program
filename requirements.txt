@@ -12,7 +12,7 @@ httpx==0.28.1
 # Learned step-duration model (closed-form linear regression, no ML framework needed)
 # Range (not a hard pin) so pip can resolve a wheel on both Python 3.11 and
 # 3.12: numpy 2.5.x requires Python >=3.12, so ==2.5.1 breaks on 3.11 (#44).
-numpy>=2.2.0,<3
+numpy>=2.5.5,<3
 
 # Per-IP rate limiting on the endpoints that spend LLM credits (issue #12)
 slowapi==0.1.10
